@@ -5,19 +5,19 @@ order: 130
 status: stable
 sourceRefs:
   [
-    'src/operations/adjust.ts#L49 · adjust',
-    "src/contract.ts#L160 · kind 'adjust'",
-    'src/operations/registry.ts#L68 · REGISTRY',
-    'src/economy.ts#L1313 · RESTRICTED_TO_PRIVILEGED',
+    'src/operations/adjust.ts#L39 · adjust',
+    "src/contract.ts#L194 · kind 'adjust'",
+    'src/operations/registry.ts#L61 · REGISTRY',
+    'src/economy.ts#L1453 · RESTRICTED_TO_PRIVILEGED',
   ]
-apiRefs: ['variables/src.adjust']
+apiRefs: ['variables/economy-lab.adjust']
 related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
 
 import adjustHttp from '../../../../snippets/http/adjust.sh?shiki';
 
-<ApiLink to="variables/src.adjust" /> is the operator's manual correction. It moves one account by a signed `amount` and books the opposite entry to a platform account, so the books stay balanced.
+<ApiLink to="variables/economy-lab.adjust" /> is the operator's manual correction. It moves one account by a signed `amount` and books the opposite entry to a platform account, which keeps the books balanced.
 
 It exists for cases no ordinary operation covers, such as closing a gap found during reconciliation.
 
@@ -26,20 +26,21 @@ You name the [account](/economy/concepts/accounts-and-double-entry/), the signed
 <CallTabs name="adjust" http={adjustHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'adjust',
-  idempotencyKey: 'idem_0',
-  actor: { kind: 'operator', operatorId: 'op_1' },
-  account: spendable('usr_alice'),
-  amount: toAmount('CREDIT', 250n),
-  reason: 'reconciliation: missing genesis lot',
-});
+const outcome = await economy.submit(
+  adjust({
+    idempotencyKey: 'recon_2026_07_usr_alice',
+    actor: operatorActor('op_1'),
+    account: spendable('usr_alice'),
+    amount: credits(250),
+    reason: 'reconciliation: missing genesis lot',
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 </CallTabs>
 
-usr_alice's spendable balance rose by 250 credits. A negative `amount` is a valid downward correction. The same call with <ApiLink to="functions/src.toAmount">toAmount("CREDIT", -250n)</ApiLink> lowers the account by `250` instead.
+usr_alice's spendable balance rose by 250 credits. A negative `amount` is a valid downward correction. The same call with <ApiLink to="functions/economy-lab.toAmount">toAmount("CREDIT", -25_000n)</ApiLink> lowers the account by `250` instead.
 
 ## Parameters
 
@@ -58,9 +59,9 @@ The payload fields, beyond the `kind` tag, are:
 `adjust` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: A fresh correction, with the posted [`Transaction`](/economy/concepts/accounts-and-double-entry/).
-- `duplicate`: A retry under the same `idempotencyKey`. That duplicate carries the earlier transaction unchanged, so the correction isn't posted twice.
+- `duplicate`: A retry under the same `idempotencyKey`. The duplicate carries the earlier transaction unchanged; the correction posts once.
 
-`adjust` returns no `rejected` outcome. A malformed request throws instead; see [reason codes](#reason-codes).
+`adjust` returns no `rejected` outcome. A malformed request throws instead. See [reason codes](#reason-codes).
 
 ## Postings
 
@@ -81,24 +82,33 @@ The handler works in the account's natural direction, so the move reads as "rais
   trust accounts stay untouched.
 </Callout>
 
+<Callout type="warning">
+  Adjusting a custodial account changes what the trust must back without moving
+  any trust cash. An upward adjust to a `spendable` account raises the [backing
+  requirement](/economy/concepts/solvency/), so the next treasury sweep reports
+  the gap as a shortfall. Pair the correction with treasury reconciliation, or
+  expect the alert.
+</Callout>
+
 ## Authorization
 
-`adjust` is operator-only. It writes a privileged correction to an account the caller need not own, a case the ownership rule that governs ordinary user operations doesn't cover. So a `user` actor may never call it; see [actors and authorization](/economy/concepts/actors-and-authorization/).
+`adjust` is operator-only. It writes a privileged correction to an account the caller need not own. The ownership rule that governs ordinary user operations doesn't cover that case. So a `user` actor may never call it. See [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-The handler re-checks the actor; a `system` caller clears the pipeline's gate but is refused by the handler, so only an `operator` can adjust.
+The handler re-checks the actor. A `system` caller clears the pipeline's gate, but the handler refuses it. Only an `operator` can adjust.
 
 ## Reason codes
 
-`adjust` returns no reason codes: it has no `rejected` path. It fails only by throwing. Its inputs are either valid or a caller error, so each bad input throws a fault rather than declining as data:
+`adjust` returns no reason codes, because it has no `rejected` path. It fails only by throwing. Its inputs are either valid or a caller error, so each bad input throws a fault rather than declining as data:
 
 | Code                   | When                                                                                                                                                      |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OP.MALFORMED`         | The `actor` isn't an `operator`, the `reason` is blank or whitespace-only, the `amount` isn't `CREDIT`, or the handler received the wrong operation kind. |
+| `AUTH.UNAUTHORIZED`    | The `actor` is a `user`. The gate refuses it before the handler runs.                                                                                     |
+| `OP.MALFORMED`         | The `actor` is `system` rather than `operator`, the `reason` is blank or whitespace-only, the `amount` isn't `CREDIT`, or the handler received the wrong operation kind. |
 | `MONEY.INVALID_AMOUNT` | The `amount` is zero.                                                                                                                                     |
 
 ## Preconditions and invariants
 
-The pipeline checks the `amount` is in range before the handler runs. An `adjust` may move money in either direction, so it only has to be non-zero, where every other operation's amount must be strictly positive. The magnitude must still sit within the per-operation ceiling.
+The pipeline checks the `amount` is in range before the handler runs. An `adjust` may move money in either direction, so its amount only has to be non-zero. Every other operation's amount must be strictly positive. The magnitude must still sit within the per-operation ceiling.
 
 The posted transaction is balanced. The account leg and its `OPENING_EQUITY` offset are exact negations, so debits and credits sum to zero and [conservation](/economy/concepts/integrity/) holds.
 

@@ -5,28 +5,28 @@ order: 50
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L500 · Store',
-    'src/ports.ts#L324 · Ledger',
-    'src/adapters/memory.ts#L1801 · memoryStore',
-    'src/engines/postgres.ts#L2425 · postgresStore',
+    'src/ports.ts#L570 · Store',
+    'src/ports.ts#L354 · Ledger',
+    'src/adapters/memory.ts#L1895 · memoryStore',
+    'packages/postgres/src/postgres.ts · postgresStore',
   ]
-apiRefs: ['interfaces/src_ports.Store']
+apiRefs: ['interfaces/ports.Store']
 related: ['economy/ports/messaging', 'economy/concepts/accounts-and-double-entry']
 ---
 
 ## The seam between the core and the world
 
-Everything the economy persists passes through one of a few narrow interfaces. The core never opens a connection or knows whether it's talking to memory or Postgres: it calls a method on a port, and an adapter does the rest.
+Everything the economy persists passes through one of a few narrow interfaces. The core never opens a connection or knows whether it's talking to memory or Postgres. It calls a method on a port, and an adapter does the rest.
 
-These ports all live in `src/ports.ts`. This page covers the ones that hold state: the <ApiLink to="interfaces/src_ports.Store" /> (the ledger and its sub-stores) and the read-through <ApiLink to="interfaces/src_ports.Cache" />. The ports that move messages — the outbox, the inbox, and the <ApiLink to="types/src_ports.Dispatcher" /> — write through the same `Store` and have [their own page](/economy/ports/messaging/).
+These ports all live in `src/ports.ts`. This page covers the ones that hold state: the <ApiLink to="interfaces/ports.Store" /> (the ledger and its sub-stores) and the read-through <ApiLink to="interfaces/ports.Cache" />. The ports that move messages — the outbox, the inbox, and the <ApiLink to="types/ports.Dispatcher" /> — write through the same `Store` and have [their own page](/economy/ports/messaging/).
 
-The rules that keep money conserved are written once, not re-implemented per backend. They're verified against every adapter, and the SQL engines push them down into the database as well.
+The rules that keep money conserved are written once. They're verified against every adapter, and the SQL engines push them down into the database as well.
 
 ## The `Store`
 
 The `Store` is the one object that gathers everything the system reads and writes. It exposes the `ledger` plus a set of named sub-stores, and a `transaction` method that runs a block of work across all of them atomically.
 
-The `ledger` is the append-only, double-entry book itself, see [accounts and double-entry](/economy/concepts/accounts-and-double-entry/) for what a <ApiLink to="types/src_ports.Posting" /> and its <ApiLink to="types/src_ports.Leg" />s are. The `Ledger` interface records a `Posting` with `append`, reads a `balance`, pages a `statement`, and streams history for the [integrity prover](/economy/concepts/integrity/) to replay.
+The `ledger` is the append-only, double-entry book itself. See [accounts and double-entry](/economy/concepts/accounts-and-double-entry/) for what a <ApiLink to="types/ports.Posting" /> and its <ApiLink to="types/ports.Leg" />s are. The `Ledger` interface records a `Posting` with `append`, reads a `balance`, pages a `statement`, and streams history for the [integrity prover](/economy/concepts/integrity/) to replay.
 
 Everything else hangs off the `Store` as a purpose-built sub-store, one per concern:
 
@@ -39,7 +39,7 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 | `sagas`         | Each in-flight [payout saga](/economy/concepts/payout-saga/) and its state.                            |
 | `subscriptions` | Recurring [subscriptions](/economy/concepts/subscriptions/) and when each is next due to bill.         |
 | `entitlements`  | Which users own which SKUs.                                                                            |
-| `promos`        | Each promo grant, so the worker can reverse the unspent remainder at expiry.                           |
+| `promos`        | Each promo grant, so the worker can reverse the unspent remainder at expiry and find every holder whose pool outlived its grants. |
 | `trust`         | Each subject's recent spending, the input to the risk gate.                                            |
 | `accruals`      | The [accrual split](/economy/concepts/accrual-split/)'s parked seller shares, claimed by the drain sweep and by refunds. |
 | `checkpoints`   | Signed ledger snapshots, written only by the worker — plus the re-proof cursor, seal heads, and the archive boundary. |
@@ -47,7 +47,7 @@ Everything else hangs off the `Store` as a purpose-built sub-store, one per conc
 | `movements`     | The append-only [session-netting](/economy/concepts/session-netting/) journal; batches commit outside money transactions. |
 | `reservations`  | Optional: the store-backed shared reservation counter [cluster nodes](/economy/concepts/cluster/) share.  |
 
-The `outbox` and `inbox` rows are storage; what flows through them is [messaging](/economy/ports/messaging/). Two optional methods sit beside `transaction`: `batchTransaction` commits several independent units in one database transaction (what [`submitBatch`](/economy/reference/the-economy/#batches-and-bursts) rides; absent, batches degrade to sequential), and `tableSizes` gauges the growing secondary tables for [`capacity()`](/economy/reference/the-economy/#capacity).
+The `outbox` and `inbox` rows are storage. What flows through them is [messaging](/economy/ports/messaging/). Two optional methods sit beside `transaction`. `batchTransaction` commits several independent units in one database transaction. [`submitBatch`](/economy/reference/the-economy/#batches-and-bursts) rides it, and when it is absent, batches degrade to sequential. `tableSizes` gauges the growing secondary tables for [`capacity()`](/economy/reference/the-economy/#capacity).
 
 ### Atomicity is the contract
 
@@ -67,11 +67,11 @@ The `Unit` is deliberately narrower than the full `Store`. The `trust` and `chec
 
 <Callout type="note">
   The in-memory adapter gets atomicity from a per-store undo log rather than a
-  real database transaction: each write records a reverser, and a rollback
+  real database transaction. Each write records a reverser, and a rollback
   replays them last-to-first. The observable contract (all-or-nothing) is the
-  same as the SQL engines. It is one writer: overlapping `transaction` callers
-  wait their turn in arrival order, so concurrent submits serialize instead of
-  interleaving.
+  same as the SQL engines. The adapter is one writer. Overlapping `transaction`
+  callers wait their turn in arrival order, so concurrent submits serialize
+  instead of interleaving.
 </Callout>
 
 ## One contract, every adapter
@@ -80,7 +80,7 @@ A port is only useful if every adapter behaves the same way. economy-lab pins th
 
 The same posting, the same overdraft rejection, and the same hash chain come back from each backend, so the choice of backend is an infrastructure decision, not a behavioral one.
 
-The suite is published (`@pwngh/economy-lab/testing`), and so are the primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — as [`@pwngh/economy-lab/store-kit`](/api/modules/src_store-kit.html). A third-party store built on both needs nothing the package doesn't export. Its whole test file is the highlighted line:
+The suite is published (`@pwngh/economy-lab/testing`). The primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — are published too, as [`@pwngh/economy-lab/store-kit`](/api/modules/store-kit.html). A third-party store built on both needs nothing the package doesn't export. Its whole test file is the highlighted line:
 
 ```ts filename=test/my-store.conformance.test.ts lines=[3]
 import { runStoreConformance } from '@pwngh/economy-lab/testing';
@@ -93,23 +93,23 @@ runStoreConformance('my-store', () => myStore());
 
 With no `DATABASE_URL` set, the system runs on `memoryStore()` — plain JavaScript `Map`s, the zero-infrastructure default for tests and local development.
 
-It's also the reference implementation. Its hash function and clock default to deterministic versions, so a bare `memoryStore()` is reproducible run to run, and the conformance suite treats it as the oracle the other adapters must match.
+It's also the reference implementation. Its hash function and clock default to deterministic versions, so a bare `memoryStore()` is reproducible run to run. The conformance suite treats it as the oracle the other adapters must match.
 
 ### Postgres and MySQL
 
-Point `DATABASE_URL` at a `postgres://` or `mysql://` connection string (a DSN, in driver terms) and the system loads that engine instead, and only then loads its driver. The SQL engines live in `src/engines/postgres.ts` and `src/engines/mysql.ts`; both pass the same conformance suite as memory.
+The SQL engines are their own packages: `@pwngh/economy-postgres` and `@pwngh/economy-mysql`. Each exports one factory that takes a connection string (a data source name, or DSN, in driver terms), opens its own pool, and returns a `Store`. Pass the result as the `store` port. `DATABASE_URL` still says which engine a deployment is configured for, and `describeEnv` and `preflight` still report it, but the lab no longer opens it: a `DATABASE_URL` with no `store` supplied fails at boot with the package to install and the line to add. Both engines pass the same conformance suite as memory.
 
-The MySQL engine's driver is swappable behind its pool seam. `createMariadbPool` (the `@pwngh/economy-lab/engines/mysql-mariadb` subpath, carrying the optional `mariadb` driver) builds a pipelining-capable pool shaped to the same `MysqlPool` interface, and `mysqlStore` rides it unchanged — same store, same schema, same SQL. A host opts in by constructing the pool itself and passing it to `mysqlStore`:
+The MySQL engine's driver is swappable behind its pool seam. `createMariadbPool` (the `@pwngh/economy-mysql/mariadb` subpath, carrying the optional `mariadb` driver) builds a pipelining-capable pool shaped to the same `MysqlPool` interface. `mysql` rides it unchanged — same store, same schema, same SQL. A host opts in by constructing the pool itself and passing it in:
 
 ```ts
-import { mysqlStore } from '@pwngh/economy-lab/engines/mysql';
-import { createMariadbPool } from '@pwngh/economy-lab/engines/mysql-mariadb';
+import { mysql } from '@pwngh/economy-mysql';
+import { createMariadbPool } from '@pwngh/economy-mysql/mariadb';
 
 const pool = await createMariadbPool(process.env.DATABASE_URL!);
-const store = mysqlStore({ pool, schema: 'assert' });
+const store = await mysql({ pool });
 ```
 
-The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="db/postgresql-schema.sql#L603-L619 · legs_conserve" />):
+The SQL engines do something the in-memory one can't: they enforce the invariants a second time, in the database. Every `CHECK` constraint in the schema is also a rule in the TypeScript code, so a user account can't go negative and a posting's legs can't fail to sum to zero, even if a raw `INSERT` tried to write around the application. The conservation half is a deferred constraint trigger that re-sums a posting's legs at commit (see <SourceLink to="packages/postgres/db/postgresql-schema.sql#L603-L619 · legs_conserve" />):
 
 ```sql
 create or replace function check_conservation() returns trigger as $$
@@ -134,27 +134,27 @@ That belongs to [integrity](/economy/concepts/integrity/), which owns the conser
 
 <Callout type="warning">
   The schema is declarative and applied by hand or in CI, never on app startup.
-  The engines fail fast instead: each checks the database's recorded schema
+  The engines fail fast instead. Each checks the database's recorded schema
   version against the code's and refuses to run on a mismatch, rather than
-  silently operating on a drifted shape. <ApiLink to="functions/src.openPorts" /> runs that check eagerly on
-  the pool; a directly-constructed `mysqlStore` defaults to `schema: 'skip'`, so
+  silently operating on a drifted shape. <ApiLink to="functions/economy-lab.openPorts" /> runs that check eagerly on
+  the pool. A directly-constructed `mysqlStore` defaults to `schema: 'skip'`, so
   no check runs unless you pass `'assert'`. The current schema carries the
-  accrual, shared-reservation, seal-head, re-proof, and archive tables; a
+  accrual, shared-reservation, seal-head, re-proof, and archive tables. A
   database stamped by an older version fails the check until `make db-migrate`
-  re-applies it — the drop-and-rebuild posture stated in [scope and
+  re-applies it. That is the drop-and-rebuild posture stated in [scope and
   non-goals](/economy/scope-and-non-goals/).
 </Callout>
 
 ## The `Cache`
 
-The `Cache` is a read-through key/value port for hot reads, mainly balances — strictly an accelerator: the core works without one, and a cache failure can never break a read.
+The `Cache` is a read-through key/value port for hot reads, mainly balances. It is strictly an accelerator. The core works without one, and a cache failure can never break a read.
 
 That guarantee is built into the contract. When no cache is injected, the read path skips it and goes straight to the ledger. When a cache _is_ present but errors, the read degrades to a direct ledger read rather than failing the request.
 
-Two adapters back it. `memoryCache` is an in-process `Map`: the zero-infrastructure reference, with its own conformance suite the way `memoryStore` is the reference for the `Store`. `redisCache` in `src/adapters/redis.ts` adapts an already-connected `ioredis` client; setting `REDIS_URL` wires it in. Either way the cache stores opaque strings and never parses them.
+Two adapters back it. `memoryCache` is an in-process `Map`. It is the zero-infrastructure reference, with its own conformance suite the way `memoryStore` is the reference for the `Store`. `redisCache` in `@pwngh/economy-redis` opens its own connection from a URL, or adapts an `ioredis` client you already have. Either way the cache stores opaque strings and never parses them.
 
 ## What the host owns
 
-These ports define the seam; the infrastructure behind them is the host's. The store and cache adapters are economy-lab's own and live in this repo: the in-memory reference, the Postgres and MySQL engines, the Redis and HTTP adapters, and the conformance suite that holds them all to one contract. A fair amount of the work here is making each driver fit that contract cleanly. What the host owns is the live infrastructure on the far side of each port: it creates and tunes the database pool, opens the Redis connection, and applies the schema. economy-lab loads a driver only when a DSN selects it, and never reaches for a connection the host didn't ask for.
+These ports define the seam. The host owns the infrastructure behind them. The store and cache adapters are economy-lab's own and live in this repo: the in-memory reference, the Postgres and MySQL engines, the Redis and HTTP adapters, and the conformance suite that holds them all to one contract. The live infrastructure on the far side of each port is the host's. It creates and tunes the database pool, opens the Redis connection, and applies the schema. economy-lab loads a driver only when a DSN selects it, and never reaches for a connection the host didn't ask for.
 
-The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), [`mariadb`](https://github.com/mariadb-corporation/mariadb-connector-nodejs), and [`ioredis`](https://github.com/redis/ioredis)) are peer dependencies, so the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed; the real client is constructed only when the matching env var is set.
+The drivers themselves ([`pg`](https://node-postgres.com), [`mysql2`](https://github.com/sidorares/node-mysql2), [`mariadb`](https://github.com/mariadb-corporation/mariadb-connector-nodejs), and [`ioredis`](https://github.com/redis/ioredis)) are peer dependencies; the host pins the versions it runs. Each adapter types its driver's surface structurally, so the file compiles and unit-tests without the package installed. The real client is constructed only when the matching env var is set.

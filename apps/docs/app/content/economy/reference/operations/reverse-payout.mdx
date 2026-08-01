@@ -5,11 +5,11 @@ order: 70
 status: stable
 sourceRefs:
   [
-    'src/operations/reversePayout.ts#L42 · reversePayout',
-    "src/contract.ts#L178 · kind 'reversePayout'",
-    'src/operations/registry.ts#L70 · REGISTRY',
+    'src/operations/reversePayout.ts#L44 · reversePayout',
+    "src/contract.ts#L217 · kind 'reversePayout'",
+    'src/operations/registry.ts#L61 · REGISTRY',
   ]
-apiRefs: ['variables/src.reversePayout']
+apiRefs: ['variables/economy-lab.reversePayout']
 related:
   [
     'economy/reference/operations/request-payout',
@@ -19,33 +19,34 @@ related:
 
 import reversePayoutHttp from '../../../../snippets/http/reverse-payout.sh?shiki';
 
-<ApiLink to="variables/src.reversePayout" /> undoes an in-flight payout by hand. It does two things in one
-[`Transaction`](/economy/concepts/accounts-and-double-entry/): it marks the payout's
-[`Saga`](/economy/concepts/payout-saga/) as `FAILED`, and it returns the reserved
+<ApiLink to="variables/economy-lab.reversePayout" /> undoes an in-flight payout by hand. In one
+[`Transaction`](/economy/concepts/accounts-and-double-entry/), it marks the payout's
+[`Saga`](/economy/concepts/payout-saga/) as `FAILED`. It also returns the reserved
 credits to the seller's `earned` account.
 
 <Callout type="danger">
-  `reversePayout` refuses a payout that has already disbursed USD: once the
-  processor has paid the seller, the saga can no longer be unwound by reversal.
+  `reversePayout` refuses a payout that has already disbursed USD. Once the
+  processor has paid the seller, a reversal can no longer unwind the saga.
 </Callout>
 
-It is the manual version of the undo the [background payout worker](/economy/reference/background-worker/)
-does automatically when it gives up on a payout. Use it to pull a payout back before any USD has left
-trust.
+The [background payout worker](/economy/reference/background-worker/) performs the same undo
+automatically when it gives up on a payout. `reversePayout` is the manual version. Use it to pull a
+payout back before any USD has left trust.
 
 You name the payout by its `sagaId` and the seller by `userId`. You must also record a `reason`:
 
 <CallTabs name="reverse-payout" http={reversePayoutHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'reversePayout',
-  idempotencyKey: 'idem_0',
-  actor: { kind: 'operator', operatorId: 'op_1' },
-  userId: 'usr_seller',
-  sagaId: 'pay_1',
-  reason: 'fraud hold',
-});
+const outcome = await economy.submit(
+  reversePayout({
+    idempotencyKey: 'unwind_pay_1',
+    actor: operatorActor('op_1'),
+    userId: 'usr_seller',
+    sagaId: 'pay_1',
+    reason: 'fraud hold',
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
@@ -63,15 +64,30 @@ The payload fields, beyond the `kind` tag, are:
 | `sagaId`         | `string`                                               | (required) | The payout to reverse, of the form `pay_<uuid>`.                                                       |
 | `reason`         | `string`                                               | (required) | An audit note for the reversal. Must be non-empty after trimming whitespace.                           |
 
+There is no sixth field. `providerReported`, which waives the still-live `SUBMITTED` refusal, is
+server-set: the payout-failed webhook mapper is its only writer, and the wire contract does not
+carry it.
+
 The operation names no account directly. The seller's `earned` account and the
 [`PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) account both come off the loaded
-<ApiLink to="interfaces/src_ports.Saga" /> inside the handler.
+<ApiLink to="interfaces/ports.Saga" /> inside the handler.
+
+<Callout type="danger">
+  You cannot set `providerReported`. It waives the `SUBMITTED`-window refusal —
+  the guard against returning the reserve while the disbursement is still in the
+  provider's hands — and a wrongly waived refusal risks paying the seller twice.
+  A request body naming it answers `OP.MALFORMED`, and so does a module route
+  handler that returns a draft carrying it; only the payout-failed webhook
+  mapper sets it, on the rail's own report that the payout will not settle. To
+  unwind a still-live payout with no such report, wait for it to age past
+  `maxPayoutAgeMs`.
+</Callout>
 
 <Callout type="warning">
   `userId` must equal the saga's own `userId`. The engine locks the account
   named by `userId`, but the undo posting credits the seller recorded on the
-  saga. A mismatch is refused, so the locked account is the one that gets
-  credited.
+  saga. The engine refuses a mismatch, so the locked account is the one that
+  gets credited.
 </Callout>
 
 ## Returns
@@ -81,7 +97,7 @@ The operation names no account directly. The seller's `earned` account and the
 - `committed`: the saga moved to `FAILED` and the undo posting committed.
 - `duplicate`: there was nothing left to undo (see preconditions below); no posting was made.
 
-`reversePayout` returns no `rejected` outcome. A malformed request throws instead; see
+`reversePayout` returns no `rejected` outcome. A malformed request throws instead. See
 [reason codes](#reason-codes).
 
 ## Postings
@@ -103,13 +119,14 @@ if the saga also stops.
 
 ## Authorization
 
-`reversePayout` is restricted to a privileged [`Principal`](/economy/concepts/actors-and-authorization/):
-an `operator` running a manual correction, or a trusted `system` service. An end user can never
-reverse a payout, even their own. A `user` principal is rejected with `AUTH.UNAUTHORIZED`.
+Only a privileged [`Principal`](/economy/concepts/actors-and-authorization/) may call
+`reversePayout`. That means an `operator` running a manual correction, or a trusted `system`
+service. An end user can never reverse a payout, even their own. The engine rejects a `user`
+principal with `AUTH.UNAUTHORIZED`.
 
 ## Reason codes
 
-`reversePayout` returns no reason codes: it has no `rejected` path. It fails only by throwing.
+`reversePayout` returns no reason codes, because it has no `rejected` path. It fails only by throwing.
 
 | Code                  | When                                                                                                                                                                      |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -128,12 +145,16 @@ the saga's [state](/economy/concepts/payout-saga/):
   reversal is allowed. This mirrors the worker's own timeout cutoff. The age is measured from
   `updatedAt`, set when the payout entered `SUBMITTED`.
 - `SUBMITTED`, still within the window: refused with `SAGA.INVALID_TRANSITION`. The disbursement is in the
-  provider's hands and may still settle externally; returning the reserve now risks a double-pay.
-  One exception: an operation carrying `providerReported` — set only by the payout-failed webhook
-  mapper, never by hand — waives this refusal, because the rail itself has reported it will not
-  settle the payout.
-- `SETTLED`: refused with `SAGA.INVALID_TRANSITION`. Real USD already left trust; there is no reserve to
-  return.
+  provider's hands and may still settle externally. Returning the reserve now risks a double-pay.
+  Over HTTP this is a `409`, not a `500` — the request was right and the answer is "not yet", so the
+  same body works once the payout ages past the window.
+  There is one exception, and it is not reachable from a request. An operation carrying
+  `providerReported` waives this refusal, because the rail itself has reported it will not settle
+  the payout. The payout-failed webhook mapper is the only writer of that field, and the wire
+  contract does not carry it, so an HTTP body naming it answers `OP.MALFORMED` instead. A module
+  route is held to the same rule: a draft naming the field is refused before it reaches `submit`.
+- `SETTLED`: refused with `SAGA.INVALID_TRANSITION`. Real USD already left trust, so there is no reserve
+  to return.
 - Any other state (`REQUESTED`, or an already-`FAILED` saga): returned as `duplicate` with no
   posting. There is nothing left in reserve to give back.
 

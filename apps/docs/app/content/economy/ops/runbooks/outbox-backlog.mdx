@@ -4,13 +4,18 @@ summary: 'Pending events aging past threshold — the relay is down or poisoned;
 plain: 'Money moved but the news about it is stuck in the outbox. The supervisor runs just the delivery job again, then checks the queue actually shrank.'
 order: 2
 status: stable
-sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/worker/relay.ts']
-apiRefs: ['interfaces/src_ports.OutboxStore']
+sourceRefs:
+  [
+    'src/supervisor/detect.ts · detectOutboxBacklog',
+    'src/supervisor/supervisor.ts · createSupervisor',
+    'src/worker/relay.ts · relayOutbox',
+  ]
+apiRefs: ['interfaces/ports.OutboxStore']
 related: ['economy/ops/the-supervisor', 'economy/ports/messaging', 'economy/ops/runbooks/signal-silence']
 ---
 
-Tier 1, automatic re-drive. Pending outbox events are aging past threshold: the relay is down,
-its dispatcher is failing, or the events are poisoned.
+This is a [Tier 1](/economy/ops/the-supervisor/) signature with an automatic re-drive. Pending outbox events are aging past
+threshold. The relay is down, its dispatcher is failing, or the events are poisoned.
 
 ## Symptoms
 
@@ -20,33 +25,42 @@ Downstream consumers stop receiving events while money keeps moving. `worker.rel
 ## Detection
 
 The relay sweep observes `OutboxStore.stats()` at the start of every run and emits the gauge
-pair. The detector reads the newest `worker.relay.backlog_age_ms` sample; at or past
-`outboxBacklogAgeMs` (default 5m) it is a finding. Age is computed on the store's own clock,
-so app/database skew cannot fake it.
+pair. The detector reads the newest `worker.relay.backlog_age_ms` sample. A sample at or past
+`outboxBacklogAgeMs` (default 5m) is a finding. The store computes the age on its own clock —
+app/database skew cannot fake it.
 
 ## Automatic response
 
-`detected` → `decided` → the `runRelay` lever — a targeted `worker.sweep({ only: ['relay'] })`
-that runs the relay job and nothing else (no checkpoint sealed, no payouts advanced); it falls
-back to the full `runSweep` when the host wired no relay lever. Verification spans ticks: the
-re-drive's own gauge still shows the pre-action backlog, so the pass reads the first sample
-newer than the action and emits `verified` as `drained` or `unchanged`. Standard guardrails:
-cooldown, attempt cap into permanent escalation, containment suppression.
+The supervisor runs `detected` → `decided` → the `runRelay` lever. That lever is a targeted
+`worker.sweep({ only: ['relay'] })`. It runs the relay job and nothing else (no checkpoint
+sealed, no payouts advanced). It falls back to the full `runSweep` when the host wired no
+relay lever. Verification spans ticks. The re-drive's own gauge still shows the pre-action
+backlog, so the pass reads the first sample newer than the action and emits `verified` as
+`drained` or `unchanged`. The standard guardrails apply: cooldown, attempt cap into permanent
+escalation, containment suppression.
 
 ## Manual steps
 
-1. `verified` said `drained`: done — find out why the scheduled relay was not running (see
+1. If `verified` reported `drained`, the re-drive already cleared the backlog. The queue is
+   healthy; move on to finding why the scheduled relay was not running on its own (see
    [signal-silence](/economy/ops/runbooks/signal-silence/)).
-2. `unchanged`: the dispatcher itself is failing. Check `worker.relay.failed` /
-   `worker.relay.dead_lettered` logs for the failure codes, and the transport (SQS queue, HTTP
-   bus, taskq bridge) directly.
-3. Rows at the attempt cap dead-letter (`status = 'dead'`, reason recorded) so a poison event
-   cannot block the queue behind it:
+2. If `verified` reported `unchanged`, the re-drive ran but the backlog did not move — the
+   dispatcher itself is failing. Read the `worker.relay.failed` / `worker.relay.dead_lettered`
+   logs for the failure codes, and check the transport (SQS queue, HTTP bus, taskq bridge)
+   directly.
+3. List any poisoned rows that have hit the attempt cap and dead-lettered — they carry
+   `status = 'dead'` with a reason recorded, parked so they cannot block the queue behind them:
    `select id, attempts, dead_letter_reason from outbox where status = 'dead';`
-4. Delivery is at-least-once and consumers dedupe by event id, so a re-drive is always safe to
-   repeat by hand: `worker.sweep({ only: ['relay'], dispatcher })` from any host shell.
+   A reason of `WORKER.ATTEMPTS_ABANDONED` names a different fault from the rest: no delivery ever
+   came back to report one. The event took the relay process down every time — a hang, a crash, an
+   out-of-memory kill — so the owner to page is the worker's, not the transport's.
+4. Re-drive the relay by hand whenever you need to — run
+   `worker.sweep({ only: ['relay'], dispatcher })` from any host shell. This is always safe to
+   repeat: delivery is at-least-once and consumers dedupe by event id, so a duplicate re-drive
+   cannot double-deliver.
 
 ## Escalation
 
-The attempt cap escalates on its own with the advisory attached. From there the question is
-the transport's owner: the events are durable and waiting; nothing is lost, only late.
+The attempt cap escalates on its own with the advisory attached. From there the question
+belongs to the transport's owner. The events are durable and waiting. Nothing is lost, only
+late.

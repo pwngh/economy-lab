@@ -6,8 +6,8 @@ status: stable
 sourceRefs:
   [
     'src/worker/index.ts · SWEEP_NAMES',
-    'src/worker/payouts.ts#L50 · advanceDuePayouts',
-    'src/worker/relay.ts#L53 · relayOutbox',
+    'src/worker/payouts.ts#L52 · advanceDuePayouts',
+    'src/worker/relay.ts#L63 · relayOutbox',
   ]
 related:
   [
@@ -18,11 +18,11 @@ related:
   ]
 ---
 
-The synchronous core posts to the ledger and returns an <ApiLink to="types/src.Outcome" /> on the request path. But plenty of work outlives a single request.
+The synchronous core posts to the ledger and returns an <ApiLink to="types/economy-lab.Outcome" /> on the request path. But plenty of work outlives a single request.
 
-A payout waits on an external rail. A subscription bills over time. A promo grant expires. A platform fee only becomes the platform's once its refund window closes. The outbox holds events that still need to drain to the dispatcher.
+A payout waits on an external rail; a subscription bills over time; a promo grant expires. A platform fee only becomes the platform's once its refund window closes. And the outbox holds events that still need to drain to the dispatcher.
 
-The worker advances each of these one safe step at a time, off the request path. It owns no new behavior: it pushes recorded work toward its next state and reports what moved.
+The worker advances each of these one safe step at a time, off the request path. It owns no new behavior. It pushes recorded work toward its next state and reports what moved.
 
 ## The sweeps
 
@@ -44,18 +44,18 @@ Here is what each sweep does:
 | `relay`            | Drain the [outbox](/economy/ports/messaging/) to the dispatcher.                     |
 | `drainInbox`       | Apply received provider events, deduping by event id.                                            |
 | `reconcile`        | Compare the provider's settled records against the ledger. With no feed configured, it reports an empty successful run. |
-| `promos`           | Claw back the unspent part of an expired promo grant.                                            |
-| `accrualDrain`     | Move parked seller shares to <ApiLink to="functions/src.earned" />, one posting per seller per run ([the accrual split](/economy/concepts/accrual-split/)). A no-op with `ACCRUAL_DRAIN` off. |
+| `promos`           | Claw back the unspent part of an expired promo grant, and burn pooled promo credit no live grant claims. |
+| `accrualDrain`     | Move parked seller shares to <ApiLink to="functions/economy-lab.earned" />, one posting per seller per run ([the accrual split](/economy/concepts/accrual-split/)). A no-op with `ACCRUAL_DRAIN` off. |
 | `reproof`          | Re-derive a page of stored chain links on a rolling cursor ([integrity](/economy/concepts/integrity/)). |
 | `orphans`          | Enumerate [sessions](/economy/concepts/session-netting/) journaled but never settled, and settle the old ones when opted in ([cluster nodes](/economy/concepts/cluster/)). |
 | `archive`          | Move the oldest sealed postings to the host's cold store ([archival](/economy/ops/archival/)).   |
 | `retention`        | Delete idempotency rows and settled-session journal rows past their horizons ([archival](/economy/ops/archival/)). |
 
-Two pairs are deliberately adjacent. `feeSweep` runs right after `treasury`: treasury only measures the surplus, then `feeSweep` moves it. And `checkpointVerify` runs before `checkpoint`, so the old snapshot is checked against the ledger before a fresh one overwrites it.
+Two pairs are adjacent on purpose. `feeSweep` runs right after `treasury`. Treasury only measures the surplus, then `feeSweep` moves it. `checkpointVerify` runs before `checkpoint`. This order checks the old snapshot against the ledger before a fresh one overwrites it.
 
 ## How a sweep is shaped
 
-Every sweep claims a bounded batch of due rows, advances each row one step, and returns a summary that buckets the rows by outcome. The cap per pass is `limit`; the current time is `now`.
+Every sweep claims a bounded batch of due rows, advances each row one step, and returns a summary that buckets the rows by outcome. `limit` caps the rows per pass. `now` supplies the current time.
 
 The payout sweep is the clearest example. It claims the due payout sagas and pushes each one forward:
 
@@ -64,25 +64,25 @@ const summary = await advanceDuePayouts(store, ctx, { now, limit });
 // → { submitted: [...], deadLettered: [...], retrying: [...] }
 ```
 
-A `RESERVED` payout is submitted to the provider and moves to `SUBMITTED`. Settlement does not happen here; it arrives through the provider's settlement webhook. A `SUBMITTED` payout is watched: when the processor adapter offers the optional `payoutStatus` probe, the sweep acts on its answer first — a provider-reported `FAILED` or `RETURNED` releases the reserve promptly, a reported `SETTLED` blocks the force-fail so a lost settlement webhook cannot end in a double-pay, and a reported `PENDING` defers the timeout while the rail is still working. Otherwise the sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
+The sweep submits a `RESERVED` payout to the provider and moves it to `SUBMITTED`. Settlement does not happen here. It arrives through the provider's settlement webhook. The sweep also watches each `SUBMITTED` payout. When the processor adapter offers the optional `payoutStatus` probe, the sweep acts on its answer first — the [processor port](/economy/ports/processor/) owns what each reported state does, including the `SETTLED` answer that blocks the force-fail so a lost settlement webhook cannot end in a double-pay. Otherwise the sweep only forces a `SUBMITTED` payout to fail when it has waited past `maxPayoutAgeMs` for a webhook that never came.
 
-When a payout is dead-lettered, the worker posts the exact reverse of the request-time reservation in the same transaction, so the seller's reserved credits are returned rather than stranded.
+When a payout is dead-lettered, the worker posts the exact reverse of the request-time reservation in the same transaction. The seller's reserved credits return rather than strand.
 
 ## Each row is isolated
 
 A sweep handles its rows one at a time, and each row runs inside its own error boundary. One broken row can't stop the others in the batch.
 
-A failure that looks temporary (a flaky network or database) bumps an attempt counter and retries next run. A permanent failure, or one that has retried too many times, is set aside (dead-lettered) so the batch never wedges on a row that can't progress.
+The outbox and inbox rows count their attempt before the work rather than after it fails. A failure that looks temporary (a flaky network or database) has already spent one and retries next run. A permanent failure — one the port's thrown fault classified `retryable: false` — or one that has retried too many times, is set aside (dead-lettered) so the batch never wedges on a row that can't progress. Counting first is also the only thing that bounds work which never comes back to report anything: a row that hangs or kills the worker every time still reaches its cap.
 
-The recorded reason names the failing subsystem. A raw throw from an injected port — the outbox dispatcher, the inbox applier, a float or reconcile feed — is stamped `PROVIDER.FAILURE`; `STORE.FAILURE` stays reserved for the storage layer. The dead-letter `reason` and the `worker.*.failed` logs are the operator's paging signal, so they point at the right owner.
+The recorded reason names the failing subsystem. The worker stamps a raw throw from an injected port — the payout rail, the outbox dispatcher, the inbox applier, a float or reconcile feed — as `PROVIDER.FAILURE`. `STORE.FAILURE` stays reserved for the storage layer. A row whose attempts ran out without any of them returning carries `WORKER.ATTEMPTS_ABANDONED` instead, which names the worker rather than the port it was calling. The dead-letter `reason` and the `worker.*.failed` logs are the operator's paging signal — they point at the right owner.
 
-The whole sweep is isolated too. `runSweeps` wraps each job, so a job that throws is recorded as a failed result against just that job, and the other sweeps still run. The run never throws.
+The whole sweep is isolated too. `runSweeps` wraps each job. A job that throws is recorded as a failed result against just that job, and the other sweeps still run. The run never throws.
 
 ## Six sweeps can be skipped
 
-Most sweeps always run. Six carry an optional capability or opt-in and short-circuit when it's absent, each reporting the fixed idle summary `IDLE_SUMMARIES` declares for it — the same shape a real run with nothing to do produces, so a dashboard never special-cases the gap.
+Most sweeps always run. Six carry an optional capability or opt-in and short-circuit when it's absent. Each one then reports the fixed idle summary `IDLE_SUMMARIES` declares for it. That summary has the same shape a real run with nothing to do produces, so a dashboard never special-cases the gap.
 
-`floatCoverage` needs a float feed (the payout rail's wallet balance) — the economy-edge bridge supplies one when enabled ([the packages](/economy/ports/packages/)). With none configured, it returns an empty successful summary and the internal `treasury` backing check stands alone. The check is alert-level either way: a shortfall is logged and counted, never posted against.
+`floatCoverage` needs a float feed (the payout rail's wallet balance). The economy-edge bridge supplies one when enabled ([the packages](/economy/ports/packages/)). With none configured, the sweep returns an empty successful summary and the internal `treasury` backing check stands alone. The check is alert-level either way. The worker logs and counts a shortfall, and never posts against it.
 
 `relay` needs a dispatcher to deliver through. With none configured, it returns an empty successful summary and pending rows stay in the outbox for a later run.
 
@@ -93,7 +93,7 @@ const summary = await relayOutbox(store, ctx, { dispatcher, limit });
 
 `drainInbox` needs an economy handle to submit through. With none, it likewise short-circuits and leaves pending inbox rows in place.
 
-The three lifecycle jobs are host opt-ins, configured through the worker's defaults (below): `orphans` runs with an `orphans` options object (and only _settles_ with `settleOlderThanMs` set — without it the sweep reports and touches nothing), `archive` runs with an archive sink and `checkpointOlderThanMs`, and `retention` runs with at least one horizon set. [Archival](/economy/ops/archival/) owns what each option means and how to choose the bounds.
+The three lifecycle jobs are host opt-ins, configured through the worker's defaults (below). `orphans` runs with an `orphans` options object, and only _settles_ with `settleOlderThanMs` set. Without that bound the sweep reports and touches nothing. `archive` runs with an archive sink and `checkpointOlderThanMs`. `retention` runs with at least one horizon set. [Archival](/economy/ops/archival/) owns what each option means and how to choose the bounds.
 
 <Callout type="note">
   `drainInbox` is never gated on the economy pause. A provider settlement the
@@ -103,24 +103,24 @@ The three lifecycle jobs are host opt-ins, configured through the worker's defau
 
 ## The relay and the inbox
 
-The relay drains the [outbox](/economy/ports/messaging/) — that page owns the pattern: why every event commits with its posting, and why delivery is at-least-once. The sweep's own contract is the batch: it claims up to `limit` pending events, sends each through the dispatcher, and marks the delivered ones done. The receiver must drop duplicates by event id; the bundled @pwngh/taskq bridge does exactly that, enqueuing each delivery keyed by the event id ([the packages](/economy/ports/packages/)).
+The relay drains the [outbox](/economy/ports/messaging/). That page owns the pattern — why every event commits with its posting, and why delivery is at-least-once. The sweep's own contract is the batch. It claims up to `limit` pending events, sends each through the dispatcher, and marks the delivered ones done. The receiver must drop duplicates by event id. The bundled `@pwngh/taskq` bridge does exactly that, enqueuing each delivery keyed by the event id ([the packages](/economy/ports/packages/)).
 
-A delivery that keeps failing bumps the row's attempt count and retries, up to `config.maxOutboxAttempts` (default `10`). At the cap the event is dead-lettered, so one poison event can't block the events behind it.
+A delivery that keeps failing bumps the row's attempt count and retries, up to `config.maxOutboxAttempts` (default `10`). At the cap the sweep dead-letters the event, so one poison event can't block the events behind it. A failure the dispatcher classified non-retryable does not wait for the cap: it dead-letters on the first refusal, since redelivery would fail the same way every run.
 
-The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored <ApiLink to="types/src.Operation" /> through the same economy a direct caller hits.
+The inbox is the inbound mirror. Where the relay delivers committed money moves outward, `drainInbox` applies received events inward, submitting each stored <ApiLink to="types/economy-lab.Operation" /> through the same economy a direct caller hits.
 
-A re-applied inbox row is deduped by the stored `idempotencyKey` (the provider event id), so a second apply resolves to a `duplicate` `Outcome` rather than a second posting. A `rejected` `Outcome` (a terminal business "no" like `INSUFFICIENT_FUNDS`) is dead-lettered, since retrying the same doomed apply every sweep would never succeed.
+The stored `idempotencyKey` (the provider event id) dedupes a re-applied inbox row. A second apply resolves to a `duplicate` `Outcome` rather than a second posting. The sweep dead-letters a `rejected` `Outcome` (a terminal business "no" like `INSUFFICIENT_FUNDS`), since retrying the same doomed apply every sweep would never succeed.
 
 ## Driving the worker
 
-A host builds the worker with <ApiLink to="functions/src_worker.createWorker">createWorker(ports, economy)</ApiLink> and drives it with `sweep`, which runs every sweep once over a shared request and returns the per-job batch plus the txn ids the run committed. Every field of the request is optional — `now` defaults to the clock, `limit` to the worker's default:
+A host builds the worker with <ApiLink to="functions/worker.createWorker">createWorker(ports, economy)</ApiLink> and drives it with `sweep`. That call runs every sweep once over a shared request. It returns the per-job batch plus the txn ids the run committed. Every field of the request is optional. `now` defaults to the clock, and `limit` falls back to the worker's default:
 
 ```ts
 const worker = createWorker(ports, economy);
 let { batch, postings } = await worker.sweep();
 ```
 
-The optional third argument, <ApiLink to="types/src_worker.WorkerDefaults" />, binds steady-state arguments once — the dispatcher, float and reconcile feeds, the batch `limit`, and the lifecycle opt-ins (`orphans`, `archive`, `retention`); any <ApiLink to="types/src_worker.SweepRequest" /> field overrides them per sweep:
+The optional third argument, <ApiLink to="types/worker.WorkerDefaults" />, binds steady-state arguments once — the dispatcher, float and reconcile feeds, the batch `limit`, and the lifecycle opt-ins (`orphans`, `archive`, `retention`). Any <ApiLink to="types/worker.SweepRequest" /> field overrides them per sweep:
 
 ```ts
 const worker = createWorker(ports, economy, {
@@ -135,31 +135,31 @@ const worker = createWorker(ports, economy, {
 const stop = worker.start(60_000);
 ```
 
-`start` is always present: it drives the ticks through `ports.scheduler` when one is set and a real timer otherwise, so start and stop stay on the same code path either way.
+`start` is always present. It drives the ticks through `ports.scheduler` when one is set, and through a real timer otherwise. Start and stop stay on the same code path either way.
 
 ## Treasury and checkpoints
 
-The treasury sweep is measure-only: it sums the custodial credits, converts to required USD at par, and compares against `TRUST_CASH`. A shortfall is logged and counted, never posted against.
+The treasury sweep is measure-only. It sums the custodial credits, converts to required USD at par, and compares against `TRUST_CASH`. The sweep logs and counts a shortfall, and never posts against it.
 
 See [solvency](/economy/concepts/solvency/) for what backing means and how the same check runs inside the prover.
 
 `feeSweep` is the write the treasury sweep doesn't do. On each run it realizes the full amount the platform is allowed to take (the smaller of its cash surplus and its matured revenue) and skips cleanly when that amount is zero. A draw that would dip into users' money throws `COMMINGLING` and posts nothing.
 
-The checkpoint pair maintains the ledger's tamper-evidence. `checkpoint` seals a fresh signed snapshot of the per-account hash chains; `checkpointVerify` re-checks the previous one against the live ledger. A mismatch is a tamper signal, recorded on the summary and logged, not thrown. See [ledger integrity](/economy/concepts/integrity/) for the chain and checkpoint mechanics.
+The checkpoint pair maintains the ledger's tamper-evidence. `checkpoint` seals a fresh signed snapshot of the per-account hash chains. `checkpointVerify` re-checks the previous one against the live ledger. A mismatch is a tamper signal. The sweep records it on the summary and logs it, and does not throw. See [ledger integrity](/economy/concepts/integrity/) for the chain and checkpoint mechanics.
 
 ## Troubleshooting
 
 ### My payout never settles
 
-The `payouts` sweep only _submits_: it converts the reserve and calls the rail, advancing the saga to `SUBMITTED`. Settlement is a separate event that arrives as the provider's verified webhook, maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, and applies through the inbox drain — so a saga parked in `SUBMITTED` is waiting on the provider, not on you.
+The `payouts` sweep only _submits_. It converts the reserve and calls the rail, advancing the saga to `SUBMITTED`. Settlement is a separate event. It arrives as the provider's verified webhook, maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, and applies through the inbox drain. So a saga parked in `SUBMITTED` is waiting on the provider, not on you.
 
 ```ts
 await worker.sweep({ limit: 50 }); // the payouts sweep submits due RESERVED sagas
 // SUBMITTED → SETTLED happens when the provider's webhook arrives, not here
 ```
 
-If the webhook never comes, the saga doesn't hang forever: past `maxPayoutAgeMs` with no provider evidence to the contrary, the sweep force-fails it and the reserve returns to the seller. [The payout saga](/economy/concepts/payout-saga/) owns the state machine.
+If the webhook never comes, the saga doesn't hang forever. Past `maxPayoutAgeMs` with no provider evidence to the contrary, the sweep force-fails it and the reserve returns to the seller. [The payout saga](/economy/concepts/payout-saga/) owns the state machine.
 
 ### A sweep keeps retrying the same row
 
-Each claimed row retries up to its attempt cap, then dead-letters with the failing subsystem named in the reason — a `PROVIDER.FAILURE` dead-letter is the rail misbehaving, a `STORE.FAILURE` is your database. Read the reason before restarting anything; the row tells you whose outage it was.
+Each claimed row retries up to its attempt cap, then dead-letters with the failing subsystem named in the reason. A `PROVIDER.FAILURE` dead-letter is the rail misbehaving. A `STORE.FAILURE` is your database. Read the reason before restarting anything. The row tells you whose outage it was.

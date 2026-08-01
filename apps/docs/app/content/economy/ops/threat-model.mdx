@@ -1,0 +1,74 @@
+---
+title: 'Threat model'
+summary: "What the reference host enforces on every request today — auth posture, body ceilings, read deadlines, webhook verification, CORS fail-closed — and the two obligations that never transfer to it: TLS and placement. Stated so a deployer knows exactly where the lab's guarantees end and theirs begin."
+plain: 'The shop has a guard at the door who checks IDs, limits how much anyone can carry in, and verifies sealed letters before opening them. The guard does not build the walls or the locks on the street entrance — that part belongs to whoever owns the building.'
+order: 6
+status: stable
+sourceRefs:
+  [
+    'src/server.ts · createServer',
+    'src/server.ts · DEFAULT_MAX_BODY_BYTES',
+    'src/server.ts · DEFAULT_READ_TIMEOUT_MS',
+    'src/server.ts · CLIENT_IP_HEADER',
+    'test/server.test.ts',
+  ]
+related:
+  [
+    'economy/reference/http-service',
+    'economy/concepts/actors-and-authorization',
+    'economy/ops/key-rotation',
+  ]
+---
+
+The reference host is one Fetch handler. Everything it enforces is listed here; anything
+not listed is the deployer's obligation. This page says what is true today — nothing on it
+is planned behavior.
+
+## What the server enforces on every request
+
+- **An authentication posture is required, not defaulted.** `createServer` refuses to
+  construct without one. A function maps each request to a principal; the literal `false`
+  declares the body's actor trusted, which is safe only in-process and never for a
+  network-exposed handler. The server stamps the authenticated principal onto the
+  operation and refuses a body that smuggles its own `actor`.
+- **Bodies read under a byte ceiling** (default 64 KiB, answers `413`) **and a read
+  deadline** (default 10 s, answers `408`) — a trickled body cannot hold a handler open.
+- **Webhooks verify before any code runs.** Signature (HMAC over the raw bytes), then
+  freshness (`x-timestamp` inside the replay window), then `eventId` dedup. A forged or
+  stale delivery never reaches code that can touch a balance.
+- **Admission control** is an opt-in limiter keyed by principal (or the bridge-stamped
+  client address); a denial answers `429` with `retry-after`. A throwing limiter fails
+  open and counts `economy.ratelimit.degraded` — degraded protection, never degraded
+  availability.
+- **CORS fails closed.** No configured origins means no CORS headers at all; browser
+  cross-origin calls are refused by the browser itself. Origins match exactly.
+- **The client address is trusted only from the bridge.** The Node host stamps
+  `x-economy-client-ip` from the socket, overwriting anything inbound.
+
+## What the toolchain enforces around it
+
+- `economy dev` binds `127.0.0.1` — a development economy is never reachable from another
+  machine unless the developer widens it deliberately with `--host`.
+- `economy serve` is the production posture: it refuses to start outside
+  `NODE_ENV=production`, refuses to bind without an auth posture, and refuses every dev
+  stand-in the preflight reports (dev rates, missing signer, missing payout provider).
+- Scoping follows the actor model: a `user` principal can act only as itself; `system`
+  and `operator` principals carry service-level and operator-level authority. The
+  [authorization page](/economy/concepts/actors-and-authorization/) is the matrix.
+- The expensive verifications — the full prover and the canonical ledger export — live at
+  the library and CLI (`economy.read.health()`, `economy db backup`,
+  `economy db restore-drill`). No wire route reaches them: `/healthz` and `/readyz` are
+  liveness probes, not the prover.
+
+## The two obligations that never transfer
+
+1. **TLS.** The handler speaks plain HTTP behind whatever terminates TLS. Certificates,
+   protocol floors, and cipher policy belong to the deployment.
+2. **Placement.** The lab does not know whether it is reachable from the internet. Putting
+   the handler behind a gateway, keeping the worker and database on a private network, and
+   deciding who can reach `/webhooks/:provider` are placement decisions only the host can
+   make.
+
+Secrets ride only in the environment — `WEBHOOK_SECRET`, `SIGNING_SECRET`, provider
+credentials — never in a module file, and the module resolver refuses a `secrets` export
+outright.

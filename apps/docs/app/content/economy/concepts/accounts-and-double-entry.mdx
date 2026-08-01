@@ -1,13 +1,13 @@
 ---
 title: 'Accounts & double-entry'
 summary: 'Every operation is a balanced double-entry posting across a fixed chart of accounts: spendable, earned, promo, and the system accounts.'
-plain: "A “chart of accounts” is simply the fixed, named set of buckets money is allowed to sit in. Nothing in the system holds value outside that list — every credit and every dollar lives in one of these named accounts, and moving money just means shifting it from one to another."
+plain: "A “chart of accounts” is the fixed, named set of buckets money is allowed to sit in. Nothing in the system holds value outside that list — every credit and every dollar lives in one of these named accounts, and moving money means shifting it from one to another."
 order: 30
 status: stable
 sourceRefs:
   [
-    'src/accounts.ts#L65',
-    'src/ledger.ts#L98',
+    'src/accounts.ts#L93 · SYSTEM',
+    'src/ledger.ts#L109 · postEntry',
   ]
 related:
   [
@@ -18,23 +18,23 @@ related:
 
 import legsHtml from '../../../snippets/legs.ts?shiki';
 
-Every balance lives in a named account. Every operation is a balanced double-entry <ApiLink to="types/src_ports.Posting" />: value moves _between_ accounts as paired debit and credit lines, and those lines always net to zero per currency.
+Every balance lives in a named account. Every operation is a balanced double-entry <ApiLink to="types/ports.Posting" />. Value moves _between_ accounts as paired debit and credit lines. Those lines always net to zero per currency.
 
 You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and obligations.
 
 ## Why it exists
 
-Balances aren't stored and mutated in place — they're _derived_: the ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
+Balances are not stored and mutated in place. They are _derived_. The ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
 
-No posting can create or destroy value: its lines cancel within each currency, so the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
+No posting can create or destroy value. Its lines cancel within each currency — the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
 
 Without the balanced-posting rule, a single edited or dropped line would mint or burn credits silently. A `topUp` could issue credits no dollars stand behind. A `spend` could pay a seller more than the buyer paid.
 
-The [solvency](/economy/concepts/solvency/) guarantee rests on this: the cash set aside on a purchase and the credits issued are two legs of _one_ balanced posting, so they can't drift apart.
+The [solvency](/economy/concepts/solvency/) guarantee rests on this rule. The cash set aside on a purchase and the credits issued are two legs of _one_ balanced posting. They cannot drift apart.
 
 ## The chart of accounts
 
-The set of account kinds is fixed. A user has accounts keyed by `AccountKind`: `spendable`, `earned`, and `promo`, built from a user id with the <ApiLink to="functions/src.spendable">spendable(userId)</ApiLink>, <ApiLink to="functions/src.earned">earned(userId)</ApiLink>, and <ApiLink to="functions/src.promo">promo(userId)</ApiLink> helpers — plus, when a [prefunded fast lane](/economy/concepts/instance-economy/) is in play, a per-session `escrow` account from `sessionEscrow(userId, sessionId)`.
+The set of account kinds is fixed. A user has accounts keyed by `AccountKind`: `spendable`, `earned`, and `promo`. The <ApiLink to="functions/economy-lab.spendable">spendable(userId)</ApiLink>, <ApiLink to="functions/economy-lab.earned">earned(userId)</ApiLink>, and <ApiLink to="functions/economy-lab.promo">promo(userId)</ApiLink> helpers build them from a user id. When a [prefunded fast lane](/economy/concepts/instance-economy/) is in play, `sessionEscrow(userId, sessionId)` adds a per-session `escrow` account.
 
 | Account     | Currency | Holds                                                                          |
 | ----------- | -------- | ------------------------------------------------------------------------------ |
@@ -43,7 +43,7 @@ The set of account kinds is fixed. A user has accounts keyed by `AccountKind`: `
 | `promo`     | `CREDIT` | A marketing grant that expires if unspent.                                     |
 | `escrow`    | `CREDIT` | Matured credits parked for one netting session; refunded to `spendable` at settle. Backed, like the spendable they came from. |
 
-The platform's house accounts are the fixed <ApiLink to="variables/src.SYSTEM" /> map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
+The platform's house accounts are the fixed <ApiLink to="variables/economy-lab.SYSTEM" /> map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
 
 | `SYSTEM` account | Currency | Holds                                                                              |
 | ---------------- | -------- | ---------------------------------------------------------------------------------- |
@@ -59,30 +59,30 @@ The platform's house accounts are the fixed <ApiLink to="variables/src.SYSTEM" /
 | `SETTLEMENT_ACCRUAL` | `CREDIT` | Sellers' shares parked between a charge and the drain sweep, under [the accrual split](/economy/concepts/accrual-split/). |
 | `NETTING_CLEARING` | `CREDIT` | The pass-through a [netting session](/economy/concepts/session-netting/)'s settle posts across; nets to zero within the posting. |
 
-One wrinkle on the table above: with [`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) set past `1`, each hot `SYSTEM` account splits into shard rows, the bare id plus `platform:revenue#1` and so on. A shard row behaves like its parent in every way that matters here (identity checks strip the `#` suffix first, so currency, class, and normal side all come from the base account), and the logical balance is the sum over the rows. [Platform sharding](/economy/concepts/platform-sharding/) explains why the split exists and how a posting picks its shard.
+The table above has one wrinkle. With [`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) set past `1`, each hot `SYSTEM` account splits into shard rows: the bare id plus `platform:revenue#1` and so on. A shard row behaves like its parent in every way that matters here. Identity checks strip the `#` suffix first, so currency, class, and normal side all come from the base account. The logical balance is the sum over the rows. [Platform sharding](/economy/concepts/platform-sharding/) explains why the split exists and how a posting picks its shard.
 
-Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for <ApiLink to="types/src.Amount" /> and <ApiLink to="types/src.Currency" />). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
+Currency is a property of the account, not the posting. Everything is `CREDIT` except `TRUST_CASH`, `USD_CLEARING`, and `REVENUE_USD`, which are `USD` (see [the money model](/economy/concepts/money-model/) for <ApiLink to="types/economy-lab.Amount" /> and <ApiLink to="types/economy-lab.Currency" />). If a leg's amount currency doesn't match its account, the posting is rejected with `CURRENCY_MISMATCH`.
 
 <ChartOfAccounts />
 
 ## Debit-normal and credit-normal
 
-Different accounts grow on opposite sides, and the ledger has to know which so a balance reads right-way-up. A user's `spendable` rises when you _credit_ it, because the platform owes them more. `TRUST_CASH` rises when you _debit_ it, because more cash is in.
+Different accounts grow on opposite sides. The ledger has to know which side, so a balance reads right-way-up. A user's `spendable` rises when you _credit_ it, because the platform owes them more. `TRUST_CASH` rises when you _debit_ it, because more cash is in.
 
 `isDebitNormal` records the side per account. The `USD` accounts, `STORED_VALUE`, `RECEIVABLE`, `PROMO_FLOAT`, and `OPENING_EQUITY` grow on a debit; the rest grow on a credit.
 
-Internally, leg amounts are stored debit-positive, credit-negative. <ApiLink to="functions/src.debit">debit(account, amount)</ApiLink> stores the amount as given, and <ApiLink to="functions/src.credit">credit(account, amount)</ApiLink> stores its negation, so a posting balances exactly when its leg amounts sum to zero.
+Internally, leg amounts are stored debit-positive, credit-negative. <ApiLink to="functions/economy-lab.debit">debit(account, amount)</ApiLink> stores the amount as given. <ApiLink to="functions/economy-lab.credit">credit(account, amount)</ApiLink> stores its negation. A posting therefore balances exactly when its leg amounts sum to zero.
 
 To turn a leg back into a balance change, `balanceDelta` flips the sign for credit-normal accounts and leaves debit-normal ones as-is. Normalized this way, the no-overdraft check can measure every account, of either polarity, against zero.
 
-Both rules are visible on any committed transaction — the legs net to zero, and `balanceDelta` reads each one as the account holder would. This one runs here; edit the price and the legs rebalance around your number:
+Both rules are visible on any committed transaction. The legs net to zero, and `balanceDelta` reads each one as the account holder would. The posting below runs live on this page. Edit the price and the legs rebalance around your number:
 
 <Runnable name="legs" html={legsHtml} />
 
 <Callout type="note">
 A posting is also classified for solvency. `classify` sorts each account into one of four buckets:
 
-- `custodial`: users' `spendable` and per-session `escrow`, the only credits that count toward the trust backing total — the backing follows the money into escrow and back out.
+- `custodial`: users' `spendable` and per-session `escrow`. These are the only credits that count toward the trust backing total, and the backing follows the money into escrow and back out.
 - `excluded`: `earned`, `promo`, and `PAYOUT_RESERVE`, obligations owed in credits, not dollars.
 - `house-asset`: value the platform holds or is owed.
 - `house-liability`: value the platform owes out.
@@ -110,6 +110,6 @@ The [prover](/economy/concepts/integrity/) goes further still, re-checking conse
 
 ## What relies on it
 
-- [`spend`](/economy/reference/operations/spend/) and every other operation post through `postEntry`, so each commits a single balanced transaction or none at all; the worked example of how a sale's legs split lives on the spend page.
-- [Solvency](/economy/concepts/solvency/) reads `classify` to total only `custodial` credits against `TRUST_CASH`; the backing line and the credit it backs are legs of one posting.
+- [`spend`](/economy/reference/operations/spend/) and every other operation post through `postEntry`, so each commits a single balanced transaction or none at all. The worked example of how a sale's legs split lives on the spend page.
+- [Solvency](/economy/concepts/solvency/) reads `classify` to total only `custodial` credits against `TRUST_CASH`. The backing line and the credit it backs are legs of one posting.
 - [Integrity](/economy/concepts/integrity/) hash-chains each account's legs and re-checks conservation, no-overdraft, and balance consistency after every committed posting.

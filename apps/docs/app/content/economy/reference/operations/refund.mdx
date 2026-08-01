@@ -5,36 +5,45 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/operations/refund.ts#L40 · refund',
-    'src/operations/registry.ts#L60 · refund',
+    'src/operations/refund.ts#L41 · refund',
+    'src/operations/registry.ts#L64 · refund',
   ]
-apiRefs: ['variables/src.refund']
+apiRefs: ['variables/economy-lab.refund']
 related:
   ['economy/reference/operations/reverse', 'economy/reference/configuration']
 ---
 
 import refundHttp from '../../../../snippets/http/refund.sh?shiki';
 
-<ApiLink to="variables/src.refund" /> reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
+<ApiLink to="variables/economy-lab.refund" /> reverses a completed [`spend`](/economy/reference/operations/spend/). It returns the buyer the full price they paid, then unwinds the sale account by account.
 
 You name the order, not the buyer or the amount. The handler reads those off the recorded sale. Pass the `orderId` from the original spend. A `reason` for the audit trail is optional:
 
 <CallTabs name="refund" http={refundHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'refund',
-  idempotencyKey: 'idem_refund_1',
-  actor: { kind: 'system', service: 'support' },
-  orderId: 'ord_1',
-  reason: 'changed mind',
-});
+const outcome = await economy.submit(
+  refund({
+    idempotencyKey: 'refund_ord_1',
+    actor: systemActor('support'),
+    orderId: 'ord_1',
+    reason: 'changed mind', // optional
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 </CallTabs>
 
 The buyer gets the full price back. Each seller is debited only up to the balance they still hold. Any uncollectable remainder is booked as a debt to the platform.
+
+The one business decline is an order the ledger never sold. It comes back as data, not an exception:
+
+```ts
+if (outcome.status === 'rejected' && outcome.detail.reason === 'UNKNOWN_ORDER') {
+  const { orderId } = outcome.detail; // the id no sale was recorded under
+}
+```
 
 ## Parameters
 
@@ -51,15 +60,15 @@ The payload is one `refund` variant of [`Operation`](/economy/reference/the-econ
 
 `refund` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
-- `committed`: the reversal posted; `transaction` is the reversing posting.
-- `duplicate`: the order was already reversed (by an earlier refund or a [`clawback`](/economy/reference/operations/clawback/)); `transaction` is the recorded reversal.
+- `committed`: the reversal posted. `transaction` is the reversing posting.
+- `duplicate`: the order was already reversed, by an earlier refund or a [`clawback`](/economy/reference/operations/clawback/). `transaction` is the recorded reversal.
 - `rejected`: no sale was found for the order. The only `RejectionCode` here is `UNKNOWN_ORDER`.
 
 ## Postings
 
-The reversal mirrors the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) leg for leg, in three groups: the buyer's accounts raised in full, each seller's `earned` and `REVENUE` clawed back but capped at what that account still holds, and whatever couldn't be clawed back credited to `SYSTEM.RECEIVABLE` so debits and credits still cancel. If a seller already spent or paid out their cut, only the part still there comes back. The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
+The reversal mirrors the sale's [double-entry posting](/economy/concepts/accounts-and-double-entry/) leg for leg, in three groups. The handler raises the buyer's accounts in full. It claws back each seller's `earned` and `REVENUE`, capped at what that account still holds. It credits whatever couldn't be clawed back to `SYSTEM.RECEIVABLE`, so debits and credits still cancel. If a seller already spent or paid out their cut, only the part still there comes back. The shortfall is always denominated in `CREDIT`, since a sale only moves `CREDIT`.
 
-A sale charged under [the accrual split](/economy/concepts/accrual-split/) reverses through its own accrual rows instead. The refund claims the order's rows: a share still pending is clawed back out of the exact `SETTLEMENT_ACCRUAL` shard that holds it, and a share already drained is recovered through `RECEIVABLE`, repaid by the drain sweep's netting. The path is data-driven — the rows say where the shares went — so it holds even when `ACCRUAL_DRAIN` has since been turned off.
+A sale charged under [the accrual split](/economy/concepts/accrual-split/) reverses through its own accrual rows instead. The refund claims the order's rows. It claws a share still pending back out of the exact `SETTLEMENT_ACCRUAL` shard that holds it. It recovers a share already drained through `RECEIVABLE`, which the drain sweep's netting repays. The path is data-driven — the rows say where the shares went — so it holds even when `ACCRUAL_DRAIN` has since been turned off.
 
 <Callout type="note">
   A refund never drives a user account negative. The ledger forbids that, which
@@ -69,9 +78,9 @@ A sale charged under [the accrual split](/economy/concepts/accrual-split/) rever
 
 ## Authorization
 
-`refund` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it: a self-serve refund debits a seller's `earned` balance, which is a fraud vector. Only a `system` service or a human `operator` may call it, see [actors and authorization](/economy/concepts/actors-and-authorization/).
+`refund` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it, because a self-serve refund debits a seller's `earned` balance, which is a fraud vector. Only a `system` service or a human `operator` may call it. See [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-A `user` actor is declined with an `AUTH.UNAUTHORIZED` fault before any work begins.
+The gate declines a `user` actor with an `AUTH.UNAUTHORIZED` fault before any work begins.
 
 ## Reason codes
 
@@ -89,12 +98,12 @@ A malformed request throws instead:
 
 ## Preconditions and invariants
 
-A refund and an order-tied `clawback` both reverse the same sale, so only one may run. Before posting, `refund` claims a second, order-scoped key, `reversed:<orderId>`. Whoever claims first reverses; the other path returns the recorded transaction as `duplicate`.
+A refund and an order-tied `clawback` both reverse the same sale, so only one may run. Before posting, `refund` claims a second, order-scoped key, `reversed:<orderId>`. Whoever claims first reverses. The other path returns the recorded transaction as `duplicate`.
 
-For a disputed sale, this makes the order of operations a runbook rule: refund first, then claw back the wallet. The refund is the only step that pulls the seller's earnings back — see [refund first, then claw back](/economy/reference/operations/clawback/#disputed-sales-refund-first-then-claw-back).
+For a disputed sale, this makes the order of operations a runbook rule: refund first, then claw back the wallet. The refund is the only step that pulls the seller's earnings back. See [refund first, then claw back](/economy/reference/operations/clawback/#disputed-sales-refund-first-then-claw-back).
 
 The order-scoped claim is recorded in the same database transaction as the reversal. If the refund rolls back, the claim rolls back too, so the order can still be reversed later.
 
-After the reversal commits, `refund` revokes the buyer's entitlement to the SKU (for a gift, the recipient's). That revocation runs in the same database transaction. The entitlement it removes is what a UI checks through [`read.entitled`](/economy/reference/reads/). It is a no-op if that user was never granted the SKU; for a sale predating ownership-at-purchase, nothing is revoked.
+After the reversal commits, `refund` revokes the buyer's entitlement to the SKU (for a gift, the recipient's). That revocation runs in the same database transaction and names this order's grant, `sale:<orderId>`, so a second order of the same SKU that stands unrefunded keeps its ownership. The entitlement it removes is what a UI checks through [`read.entitled`](/economy/reference/reads/). The revocation is a no-op if that user was never granted the SKU. For a sale predating ownership-at-purchase, nothing is revoked.
 
 The reversing posting balances to zero across each currency, exactly as the sale did, so [conservation](/economy/concepts/integrity/) holds.

@@ -4,7 +4,7 @@ summary: "An account can only commit as fast as its one lock turns over, and eve
 plain: "One cash register can only serve one customer at a time, no matter how short the line. Opening four registers lets four lines move at once — and as long as every return goes back to the register that made the sale, the day's books still add up."
 order: 95
 status: stable
-sourceRefs: ['src/accounts.ts#L200 · platformShard', 'test/sharding.test.ts']
+sourceRefs: ['src/accounts.ts#L195 · platformShard', 'test/sharding.test.ts']
 related: ['economy/concepts/concurrency', 'economy/reference/configuration']
 ---
 
@@ -14,25 +14,25 @@ Every top-up debits `STORED_VALUE` and every sale credits `REVENUE`, so a thousa
 
 ## Splitting the line
 
-[`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`), and concurrent postings spread across them instead of queueing on one.
+[`PLATFORM_SHARDS`](/economy/reference/configuration/#platform-sharding) breaks up that line. Set to four, say, each hot platform account becomes four rows (the bare id plus `platform:revenue#1` through `#3`). Concurrent postings spread across them instead of queueing on one.
 
 <PlatformShards />
 
-The seven accounts that take this traffic shard: `REVENUE`, `STORED_VALUE`, `TRUST_CASH`, `USD_CLEARING`, `REVENUE_USD`, `PROMO_FLOAT`, and `PAYOUT_RESERVE`. `RECEIVABLE` and `OPENING_EQUITY` move rarely and stay single rows.
+The eight accounts that take this traffic shard: `REVENUE`, `STORED_VALUE`, `TRUST_CASH`, `USD_CLEARING`, `REVENUE_USD`, `PROMO_FLOAT`, `PAYOUT_RESERVE`, and `SETTLEMENT_ACCRUAL` — the parking account [the accrual split](/economy/concepts/accrual-split/) uses, which is why that split is meant to run with two or more shards. `RECEIVABLE` and `OPENING_EQUITY` move rarely and stay single rows.
 
 A shard row behaves like any other account under the machinery on the concurrency page: it takes its own lock and extends its own [hash chain](/economy/concepts/integrity/). The point of the split is precisely that those are _different_ locks and _different_ chains.
 
 ## Routing is deterministic
 
-The routing can't be random, because a retry has to land on the same row the first attempt locked. So a posting picks its shard by hashing the operation's [idempotency key](/economy/concepts/idempotency/), which is stable across retries and already known both when locks are taken and when legs are built.
+The routing can't be random, because a retry has to land on the same row the first attempt locked. So a posting picks its shard by hashing the operation's [idempotency key](/economy/concepts/idempotency/). That key is stable across retries, and it is already known both when locks are taken and when legs are built.
 
-`PAYOUT_RESERVE` is the exception, and the reason is time. Credits enter the reserve when a payout is requested and leave when it settles or reverses, and that second step is a different operation, days later, carrying a different idempotency key. Hash that key and the debit would land on some other shard holding nothing — and the reserve is overdraft-guarded. The user id is the one routing key both ends of a payout know, so the reserve routes by user.
+`PAYOUT_RESERVE` is the exception, and the reason is time. Credits enter the reserve when a payout is requested and leave when it settles or reverses. That second step is a different operation, days later, carrying a different idempotency key. Hash that key and the debit would land on some other shard holding nothing. The reserve is overdraft-guarded, so that posting would be refused. The user id is the one routing key both ends of a payout know. The reserve routes by user.
 
 ## Readers sum the rows
 
-No reader cares which shard holds what. The logical balance is the sum over the rows: the [backing check](/economy/concepts/solvency/) totals `TRUST_CASH` across its shards before weighing it against what users are owed, and the fee sweep drains matured `REVENUE` from whichever shards hold it.
+No reader cares which shard holds what. The logical balance is the sum over the rows. The [backing check](/economy/concepts/solvency/) totals `TRUST_CASH` across its shards before weighing it against what users are owed. The fee sweep drains matured `REVENUE` from whichever shards hold it.
 
-The public read follows the same rule. `economy.read.balance` on a bare sharded account returns the sum over its shard rows, so a revenue dashboard reads one logical number whatever the shard count. A host that reads rows directly builds the ids with `shardsOf` and `shardRef` from [`/store-kit`](/api/modules/src_store-kit.html):
+The public read follows the same rule. `economy.read.balance` on a bare sharded account returns the sum over its shard rows, so a revenue dashboard reads one logical number whatever the shard count. A host that reads rows directly builds the ids with `shardsOf` and `shardRef` from [`/store-kit`](/api/modules/store-kit.html):
 
 ```ts
 import { SYSTEM } from '@pwngh/economy-lab';
@@ -45,12 +45,12 @@ const rows = shardsOf(SYSTEM.REVENUE, 4);
 // → ["platform:revenue", "platform:revenue#1", "platform:revenue#2", "platform:revenue#3"]
 ```
 
-A shard also inherits its parent's currency, class, and normal side (identity checks strip the `#` suffix first), so everything downstream of [`classify`](/economy/concepts/accounts-and-double-entry/) already treats the rows as one account.
+A shard also inherits its parent's currency, class, and normal side (identity checks strip the `#` suffix first). So everything downstream of [`classify`](/economy/concepts/accounts-and-double-entry/) already treats the rows as one account.
 
 ## Turning it on is safe
 
-The default is `1`: the unsharded ledger, byte-identical to before the knob existed. And because shard 0 keeps the bare account id, an existing ledger's balances already live on shard 0, so turning sharding on later is safe.
+The default is `1`: the unsharded ledger, byte-identical to a ledger written with the knob unset. Shard 0 keeps the bare account id, so an existing ledger's balances already live on shard 0. Turning sharding on later is therefore safe.
 
-This is deliberately the one scale lever in a single-database design. It relieves contention on the hot rows _inside_ that database; cross-node partitioning of the ledger is [out of scope](/economy/scope-and-non-goals/).
+This lever relieves contention on the hot rows _inside_ the single database of record. The other levers ([the accrual split](/economy/concepts/accrual-split/), [session netting](/economy/concepts/session-netting/), [cluster nodes](/economy/concepts/cluster/)) share that boundary. Cross-database partitioning of the ledger is [out of scope](/economy/scope-and-non-goals/).
 
-Sharding covers the platform's accounts. The other hot row — a popular seller's <ApiLink to="functions/src.earned" /> account — is a user account and can't shard; [the accrual split](/economy/concepts/accrual-split/) takes it off the purchase path instead, and is meant to run with `PLATFORM_SHARDS` at two or more.
+Sharding covers the platform's accounts. The other hot row — a popular seller's <ApiLink to="functions/economy-lab.earned" /> account — is a user account and can't shard. Instead, [the accrual split](/economy/concepts/accrual-split/) takes it off the purchase path, and is meant to run with `PLATFORM_SHARDS` at two or more.

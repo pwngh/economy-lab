@@ -3,8 +3,8 @@ title: 'Scheduled top-ups'
 summary: 'A recurring allowance from any timer, made safe by minting the idempotency key from the period.'
 order: 40
 status: stable
-sourceRefs: ['src/operations/topUp.ts#L36 · topUp', 'src/contract.ts#L90 · idempotencyKey']
-apiRefs: ['variables/src.topUp', 'functions/src.idempotencyKey', 'interfaces/src_ports.Scheduler']
+sourceRefs: ['src/operations/topUp.ts#L36 · topUp', 'src/contract.ts#L99 · idempotencyKey']
+apiRefs: ['variables/economy-lab.topUp', 'functions/economy-lab.idempotencyKey', 'interfaces/ports.Scheduler']
 related:
   [
     'economy/reference/operations/top-up',
@@ -26,7 +26,7 @@ because the safety lives in the key: fire twice in one period and the second sub
 
 <Runnable name="recipe-allowance" html={recipeAllowanceHtml} />
 
-The key discipline is the whole trick, and it is the same one every
+The key discipline is the same one every
 [idempotent retry](/economy/concepts/idempotency/) uses: derive the key from the action's own
 identity (`allowance_usr_kid_2026-07`), never from `Date.now()` or a random id at fire time. A
 timer that misfires, a job that retries after a crash, and a deploy that replays a backlog all

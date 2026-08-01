@@ -4,14 +4,14 @@ summary: "A marketplace sale: the buyer spends, the seller earns, and the platfo
 order: 20
 status: stable
 sourceRefs:
-  ['src/operations/spend.ts#L80 · spend', 'src/pricing.ts#L60 · splitLegs']
-apiRefs: ['variables/src.spend', 'types/src.FeePolicy']
+  ['src/operations/spend.ts#L81 · spend', 'src/pricing.ts#L56 · splitLegs']
+apiRefs: ['variables/economy-lab.spend', 'types/economy-lab.FeePolicy']
 related: ['economy/reference/configuration']
 ---
 
 import spendHttp from '../../../../snippets/http/spend.sh?shiki';
 
-<ApiLink to="variables/src.spend" /> runs a marketplace purchase. It charges the buyer and pays the sellers as one balanced [double-entry posting](/economy/concepts/accounts-and-double-entry/).
+<ApiLink to="variables/economy-lab.spend" /> runs a marketplace purchase. It charges the buyer and pays the sellers as one balanced [double-entry posting](/economy/concepts/accounts-and-double-entry/).
 
 The same transaction also records a sale under `orderId` and grants the buyer the `sku`.
 
@@ -20,30 +20,63 @@ A purchase with a single seller taking the whole price looks like this:
 <CallTabs name="spend" http={spendHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'spend',
-  idempotencyKey: 'idem_0',
-  actor: { kind: 'user', userId: 'usr_buyer' },
-  orderId: 'ord_1',
-  buyerId: 'usr_buyer',
-  sku: 'wrld_pass',
-  price: toAmount('CREDIT', 400n),
-  recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
-});
+const outcome = await economy.submit(
+  spend({
+    idempotencyKey: 'spend_ord_1',
+    actor: userActor('usr_buyer'),
+    orderId: 'ord_1',
+    buyerId: 'usr_buyer',
+    sku: 'wrld_pass',
+    price: credits(480),
+    recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+    ageRestricted: false, // optional — tags the posting for audit
+    giftTo: 'usr_buyer', // optional — another user id makes it a gift (below)
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 </CallTabs>
 
-The buyer's `promo` balance is drawn first, then `spendable`. The seller is credited to their `earned` balance, and the platform keeps its fee.
+The engine draws the buyer's `promo` balance first, then `spendable`. The seller's `earned` balance receives the credit, and the platform keeps its fee.
 
-A purchase can split the price across several sellers. Each <ApiLink to="types/src.Recipient" /> takes a share in basis points (bps), and the shares must sum to `10_000`:
+A decline comes back as data, not an exception. Narrow on `detail.reason` to read it:
+
+```ts
+if (outcome.status === 'rejected') {
+  if (outcome.detail.reason === 'INSUFFICIENT_FUNDS') {
+    const { need, have } = outcome.detail; // the decline's real figures
+  }
+  if (outcome.detail.reason === 'FUNDS_IMMATURE') {
+    const readyAt = outcome.detail.availableAt; // retry the same key after this
+  }
+}
+```
+
+A purchase can split the price across several sellers. Each <ApiLink to="types/economy-lab.Recipient" /> takes a share in basis points (bps), and the shares must sum to `10_000`:
 
 ```ts
 recipients: [
   { sellerId: 'usr_seller_a', shareBps: 6_000 },
   { sellerId: 'usr_seller_b', shareBps: 4_000 },
 ];
+```
+
+A purchase can also be a gift. `giftTo` grants the `sku` to another user while the buyer still pays:
+
+```ts
+const outcome = await economy.submit(
+  spend({
+    idempotencyKey: 'spend_ord_2',
+    actor: userActor('usr_buyer'),
+    orderId: 'ord_2',
+    buyerId: 'usr_buyer',
+    sku: 'wrld_pass',
+    price: credits(480),
+    recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
+    giftTo: 'usr_friend', // usr_friend owns the pass; usr_buyer paid
+  }),
+);
 ```
 
 ## Parameters
@@ -59,7 +92,7 @@ The payload fields, beyond the `kind` tag, are:
 | `sku`            | `string`                                                    | (required) | The item granted on success.                                                                                      |
 | `price`          | [`Amount`](/economy/concepts/money-model/)                  | (required) | The total charge. Must be positive and in `CREDIT`.                                                               |
 | `recipients`     | [`Recipient[]`](/economy/ports/pricing/)                    | (required) | Sellers and their shares in bps. At least one recipient; an empty list is refused.                                |
-| `ageRestricted`  | `boolean`                                                   | `false`    | Tags the posting for audit. The core does not block on age.                                                       |
+| `ageRestricted`  | `boolean`                                                   | `false`    | Tags the posting for audit, so the host can prove which sales it marked age-restricted. Enforcement is the host's job — see [scope and non-goals](/economy/scope-and-non-goals/). |
 | `giftTo`         | `string`                                                    | `buyerId`  | Grants the `sku` to this user instead of the buyer. The buyer still pays.                                         |
 
 Each `Recipient` is `{ sellerId: string; shareBps: number }`. A `shareBps` must be `> 0` and `≤ 10_000`, and the shares must sum to exactly `10_000`.
@@ -74,7 +107,7 @@ Each `Recipient` is `{ sellerId: string; shareBps: number }`. A `shareBps` must 
 
 ## Postings
 
-`spend` posts one balanced [`Transaction`](/economy/concepts/accounts-and-double-entry/), split into a promo-funded part and a spendable-funded part that each balance on their own.
+`spend` posts one balanced [`Transaction`](/economy/concepts/accounts-and-double-entry/). The posting splits into a promo-funded part and a spendable-funded part. Each part balances on its own.
 
 The `spendable`-funded part debits the buyer and lets the [pricing policy](/economy/ports/pricing/) split the credit across sellers and the house:
 
@@ -101,28 +134,28 @@ The `promo`-funded part spends down the buyer's marketing grant and funds the se
 
 ### How the split is computed
 
-For the `spendable`-funded part, the injected [fee policy](/economy/ports/pricing/) builds the credit side through `splitLegs`. The fee comes off the top, the net is divided among the sale's recipients by share, and `REVENUE` receives the fee plus any rounding leftover, so no minor unit of the price is lost.
+For the `spendable`-funded part, the injected [fee policy](/economy/ports/pricing/) builds the credit side through `splitLegs`. The fee comes off the top. The policy divides the net among the sale's recipients by share. `REVENUE` receives the fee plus any rounding leftover, so no minor unit of the price is lost.
 
 ```ts
-// A 1000-credit sale, 30% fee, one seller taking 100%:
-//   credit earned(seller)  700
-//   credit REVENUE         300   (fee + leftover)
-// Credits store negative, so the two lines sum to -1000, the price.
+// The 480-credit sale above, at the default 15.3% fee, one seller taking 100%:
+//   credit earned(seller)  406   (the net)
+//   credit REVENUE          74   (fee, rounded up to a whole credit)
+// Credits store negative, so the two lines sum to -480, the price.
 // The spend handler adds the buyer's matching debit, zeroing the posting.
 ```
 
-The `promo`-funded part carries no fee, so it skips `splitLegs`: sellers are paid from `REVENUE` and the buyer's `promo` is spent down against `PROMO_FLOAT`.
+The `promo`-funded part carries no fee, so it skips `splitLegs`. The handler pays the sellers from `REVENUE` and spends the buyer's `promo` down against `PROMO_FLOAT`.
 
 <Callout type="note">
   With [the accrual split](/economy/concepts/accrual-split/) on (`ACCRUAL_DRAIN`), the seller
   legs above park on a `SETTLEMENT_ACCRUAL` shard instead, and the worker's drain sweep credits
-  each seller's `earned` in batches. The buyer's side and the fee are unchanged; only when the
-  seller's balance moves changes.
+  each seller's `earned` in batches. The buyer's side and the fee are unchanged. Only the timing
+  of the seller's balance movement changes.
 </Callout>
 
 ## Authorization
 
-`spend` is open to an end user: the buyer runs it on their own wallet. A `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may also call it.
+`spend` is open to an end user. The buyer runs it on their own wallet. A `system` or `operator` [actor](/economy/concepts/actors-and-authorization/) may also call it.
 
 A `user` actor must own every account the operation debits, so a buyer may only spend from their own `promo` and `spendable` balances. Submitting a `spend` whose `buyerId` is someone else's wallet is unauthorized.
 
@@ -137,6 +170,8 @@ A well-formed `spend` on a healthy system can be declined for these reasons, eac
 | `DUPLICATE_ORDER`    | A sale already exists for this `orderId` under a different `idempotencyKey`, so a second charge is refused.                           |
 | `RISK_DENIED`        | The purchase would push the buyer past their recent-spending [velocity limit](/economy/concepts/spend-velocity/).                     |
 | `ECONOMY_PAUSED`     | A maintenance window is in effect, so an end user's purchase is declined. The decline carries `resumesAt`.                            |
+
+One more decline appears once the host wires a [catalog port](/economy/ports/catalog/): `CATALOG_MISMATCH`, when a `spend` disagrees with the live offer's `sku`, `price`, or `recipients`. The economy checks it, not the door, so an in-process submit is held to the offer exactly as `/submit` is.
 
 A malformed request throws instead:
 

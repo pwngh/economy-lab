@@ -6,8 +6,8 @@ order: 62
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L1540-L1541 · SUBSCRIPTION_STATES',
-    'src/worker/subscriptions.ts',
+    'src/ports.ts#L1788-L1790 · SUBSCRIPTION_STATES',
+    'src/worker/subscriptions.ts · sweepDueSubscriptions',
   ]
 related:
   [
@@ -30,7 +30,7 @@ const outcome = await economy.submit(
     userId: 'usr_b2',
     sellerId: 'usr_s1',
     sku: 'sku_pro',
-    price: toAmount('CREDIT', 900n),
+    price: toAmount('CREDIT', 50_000n), // 500 credits per period
     periodMs: 30 * 24 * 60 * 60 * 1000,
   }),
 );
@@ -41,21 +41,21 @@ const owned = await economy.read.entitled('usr_b2', 'sku_pro');
 
 ## Renewals
 
-Each period the sweep claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's <ApiLink to="functions/src.spendable" />, pays the seller, and moves the next due date forward.
+Each period the sweep claims a one-charge-per-period key (so overlapping sweeps can't double-bill), debits the subscriber's <ApiLink to="functions/economy-lab.spendable" />, pays the seller, and moves the next due date forward.
 
-The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L1022-L1027 · SubscriptionStore.markBilled" />).
+The renewal claim is a compare-and-set. `subscriptions.markBilled` sets the next period only if the row still shows the period the sweep claimed, so the loser of a race treats it as a no-op (see <SourceLink to="src/ports.ts#L1239-L1244 · SubscriptionStore.markBilled" />).
 
-The first period may draw on promo credit; renewals come only from `spendable`.
+The first period may draw on promo credit. Renewals come only from `spendable`, because a promo grant is a one-time marketing gift with an expiry, not a standing funding source.
 
 ## The states
 
-A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L1540-L1541 · SUBSCRIPTION_STATES" />).
+A `Subscription` carries its own `SubscriptionState`: `ACTIVE`, `LAPSED`, `CANCELED` (see <SourceLink to="src/ports.ts#L1788-L1790 · SUBSCRIPTION_STATES" />).
 
 <SubscriptionStates />
 
-`maxSubscriptionAttempts` separates a transient charge failure from a subscription that will never pay: a success resets the count, and at the cap the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L167-L175 · lapseAtomically" />).
+`maxSubscriptionAttempts` separates a transient charge failure from a subscription that will never pay. A success resets the count. At the cap, the sweep flips `ACTIVE → LAPSED`, revokes the entitlement, and emits the lapse event in one transaction (see <SourceLink to="src/worker/subscriptions.ts#L176-L180 · lapseAtomically" />).
 
-A wallet holding enough credit that has not yet [matured](/economy/concepts/credit-maturity/) defers the same way: the renewal records a retrying attempt instead of lapsing — the money is temporally, not terminally, missing — and bills once the credits clear. Only a wallet that cannot cover the price at all lapses on the spot.
+A wallet holding enough credit that has not yet [matured](/economy/concepts/credit-maturity/) defers the same way. The renewal records a retrying attempt instead of lapsing, then bills once the credits clear. The money is temporally, not terminally, missing. Only a wallet that cannot cover the price at all lapses on the spot.
 
 [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) is the voluntary exit: the user or an operator flips `ACTIVE → CANCELED`. The current period is not refunded.
 
@@ -63,16 +63,16 @@ A wallet holding enough credit that has not yet [matured](/economy/concepts/cred
 
 A subscription bills **once per period**, and its state only moves forward, no matter how many times the sweep re-runs or how its triggers race.
 
-Every transition is a compare-and-set against the current state, so a step is applied by exactly one writer. The charge that accompanies a renewal commits in the same database transaction as the due-date move, so the books and the record never diverge.
+Each transition is a compare-and-set against the current state — only one writer can apply a given step. And the renewal's charge commits in the same database transaction as the due-date move. The books and the record move together or not at all.
 
 ## How it's enforced
 
-- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, so a racing sweep can detect and stand down on a lost claim (see <SourceLink to="src/ports.ts#L1022-L1064 · SubscriptionStore" />).
+- **The store's compare-and-set method.** `SubscriptionStore.markBilled` is a conditional update that returns whether it changed a row, letting a racing sweep detect a lost claim and stand down (see <SourceLink to="src/ports.ts#L1184-L1226 · SubscriptionStore" />).
 - **One transaction per step.** A renewal posts its charge and moves the due date inside `store.transaction`; a lapse flips the state, revokes the entitlement, and emits its event the same way. A partial step rolls back whole.
 - **The retry cap.** A subscription that can't pay doesn't retry forever: the attempt count is stored on the row, and the cap turns repeated failure into a single, terminal `LAPSED` transition.
 
 ## Operations and ports that rely on it
 
-[`subscribe`](/economy/reference/operations/subscribe/) opens the record and [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) ends it; the worker's `subscriptions` sweep drives everything in between.
+[`subscribe`](/economy/reference/operations/subscribe/) opens the record and [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) ends it. The worker's `subscriptions` sweep drives everything in between.
 
 The records persist through the `SubscriptionStore` sub-store of the [`Store`](/economy/ports/storage/) port. Every transition is a compare-and-set and every step is one transaction — the same discipline [the payout saga](/economy/concepts/payout-saga/) relies on, applied to a record that recurs instead of one that completes.

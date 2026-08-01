@@ -5,10 +5,10 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L216-L232 · Processor',
-    'src/adapters/processor.ts#L64 · httpProcessor',
+    'src/ports.ts#L238-L254 · Processor',
+    'src/adapters/processor.ts#L65 · httpProcessor',
   ]
-apiRefs: ['interfaces/src_ports.Processor']
+apiRefs: ['interfaces/ports.Processor']
 related:
   [
     'economy/ports/packages',
@@ -20,15 +20,15 @@ related:
 
 ## The seam where real money leaves
 
-economy-lab never moves real money on its own. It keeps a double-entry ledger of credits and tracks what each seller is owed, but the actual USD disbursement lives at a payment provider you plug in. The <ApiLink to="interfaces/src_ports.Processor" /> port is that seam.
+economy-lab never moves real money on its own. It keeps a double-entry ledger of credits and tracks what each seller is owed. The actual USD disbursement lives at a payment provider you plug in. The <ApiLink to="interfaces/ports.Processor" /> port is that seam.
 
 Everything else (balances, reserves, the hash chain) stays inside the lab and is provable. A payout is money the lab can no longer see once it lands, so the lab hands that step to a provider and records only the provider's reference.
 
-The lab proves it asked for a disbursement and proves the saga that tracks it; whether the cash actually reached the seller is the provider's account to settle, reported back later.
+The lab proves it asked for a disbursement and proves the saga that tracks it. Whether the cash actually reached the seller is the provider's account to settle. The provider reports that back later.
 
-## The interface
+## One required method and one optional probe
 
-`Processor` is one required method and one optional probe. You give it a payout to send; it returns the provider's reference for that payout.
+`Processor` is one required method and one optional probe. You give it a payout to send. It returns the provider's reference for that payout.
 
 ```ts
 interface Processor {
@@ -44,15 +44,15 @@ interface Processor {
 }
 ```
 
-The background worker passes the payout saga id as `key`, so a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
+The background worker passes the payout saga id as `key`; a retried submit pays out at most once. `userId` is an opaque `usr_…` token, never personal data. `amount` is in real USD, already converted from the seller's reserved credits at the [payout rate](/economy/concepts/money-model/).
 
-The return is just `{ providerRef }`: the provider's own id for the disbursement, recorded on the [payout saga](/economy/concepts/payout-saga/) for the audit trail.
+The return is just `{ providerRef }`. That is the provider's own id for the disbursement, recorded on the [payout saga](/economy/concepts/payout-saga/) for the audit trail.
 
-There is deliberately no settlement *path* on this port. Settlement takes time, and polling for it would couple the request path to the provider's latency; the provider reports settlement and disputes the other way, through inbound webhooks. The optional `payoutStatus` probe is evidence, not a settlement path: when an adapter offers it, the payout sweep consults it before acting on a silent `SUBMITTED` payout — a provider-reported `FAILED` or `RETURNED` releases the seller's reserve promptly instead of waiting out `maxPayoutAgeMs`, a reported `SETTLED` blocks the force-fail so a lost settlement webhook can never end in a double-pay, and a reported `PENDING` defers the timeout while the rail is still working. An adapter that cannot answer returns `UNKNOWN`, which the sweep treats exactly like having no probe at all. When the method is absent, the webhook plus the timeout are the whole protocol.
+There is deliberately no settlement *path* on this port. Settlement takes time, and polling for it would couple the request path to the provider's latency. Instead, the provider reports settlement and disputes the other way, through inbound webhooks. The optional `payoutStatus` probe is evidence, not a settlement path. When an adapter offers it, the payout sweep consults it before acting on a silent `SUBMITTED` payout. A provider-reported `FAILED` or `RETURNED` releases the seller's reserve promptly instead of waiting out `maxPayoutAgeMs`. A reported `SETTLED` blocks the force-fail, so a lost settlement webhook can never end in a double-pay. A reported `PENDING` defers the timeout while the rail is still working. An adapter that cannot answer returns `UNKNOWN`, which the sweep treats exactly like having no probe at all. When the method is absent, the webhook plus the timeout are the whole protocol.
 
 <Callout type="note">
   `submitPayout` returns once the provider *accepts* the request, not once the
-  money lands. The disbursement is in flight at that point; the saga stays in
+  money lands. The disbursement is in flight at that point. The saga stays in
   `SUBMITTED` until the settlement webhook arrives.
 </Callout>
 
@@ -60,13 +60,13 @@ There is deliberately no settlement *path* on this port. Settlement takes time, 
 
 You don't call `submitPayout` directly. [The background worker](/economy/reference/background-worker/) does, on its payout sweep, when a payout saga reaches `RESERVED`.
 
-The sweep converts the seller's reserved credits to USD at the current payout rate and calls `submitPayout`. It records the returned `providerRef` on the saga and advances it to `SUBMITTED`. That single attempt is all the adapter owns. Retry, backoff, and the attempt cap live in the worker (`src/worker/payouts.ts`), so the adapter's job is to either succeed or throw a retryable fault and let the next sweep try again.
+The sweep converts the seller's reserved credits to USD at the current payout rate and calls `submitPayout`. It records the returned `providerRef` on the saga and advances it to `SUBMITTED`. That single attempt is all the adapter owns. Retry, backoff, and the attempt cap live in the worker (`src/worker/payouts.ts`), and the worker reads a thrown submit by its retry verdict. A fault marked `retryable` — or a raw throw carrying no verdict — leaves the payout to the next sweep. A fault the adapter classified non-retryable is a refusal: the rail has ruled the disbursement out, so the worker fails the payout at once rather than re-driving a call that can never succeed.
 
-A failed submit never strands the seller. If the worker exhausts its attempts, it dead-letters the saga and posts the exact reverse of the request-time reservation, returning the reserved credits to the seller's earned account.
+A failed submit never strands the seller. Whether the rail refused outright or the settlement window expired with no answer, the worker dead-letters the saga and posts the exact reverse of the request-time reservation, returning the reserved credits to the seller's earned account.
 
 ## The reference adapter
 
-The default adapter, `httpProcessor`, POSTs the payout to an HTTP endpoint you configure. It's the reference implementation: enough to wire up a fake provider in a test or a sandbox, not a real rail.
+The default adapter, `httpProcessor`, POSTs the payout to an HTTP endpoint you configure. It's the reference implementation. It is enough to wire up a fake provider in a test or a sandbox, not a real rail.
 
 You give it an endpoint and an optional API key. It serializes the payout to JSON and POSTs it, then reads a `providerRef` back out of the 2xx body:
 
@@ -79,7 +79,7 @@ const processor = httpProcessor({
 
 The amount crosses the wire as a decimal string like `"USD:12.34"`, since money is a `bigint` and `JSON.stringify` can't serialize one. The API key, when set, rides in an `Authorization: Bearer` header and is never written to logs or error details.
 
-A failed send or a non-2xx status is **retryable**: nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**: the money may already have gone out, so retrying could pay twice, and reconciliation resolves the ambiguity instead.
+A failed send or a non-2xx status is **retryable**. Nothing was paid, so trying again is safe. But a 2xx body with no `providerRef` is **non-retryable**. The money may already have gone out, so retrying could pay twice. Reconciliation resolves the ambiguity instead.
 
 <Callout type="warning">
   `httpProcessor` assumes a provider that already speaks economy-lab's
@@ -89,35 +89,35 @@ A failed send or a non-2xx status is **retryable**: nothing was paid, so trying 
 
 ## The edge shim
 
-`edgeTiliaProcessor` (in `src/adapters/edge-tilia.ts`) is a `Processor` backed by the sibling [`@pwngh/economy-edge`](https://github.com/pwngh/economy-edge) package's Tilia adapter — VRChat's payout rail. The edge package owns the rail's dialect (auth, wire shapes, idempotency threading, status vocabulary); the shim is a thin mapping from the lab's narrow port onto the edge's outbound surface.
+`edgeTiliaProcessor` (in `src/adapters/edge-tilia.ts`) is a `Processor` backed by the sibling [`@pwngh/economy-edge`](https://github.com/pwngh/economy-edge) package's Tilia adapter. The edge package owns the rail's dialect (auth, wire shapes, idempotency threading, status vocabulary). The shim is a thin mapping from the lab's narrow port onto the edge's outbound surface.
 
-The shim maps the edge's tri-state submit onto the port's throw contract: `ACCEPTED` returns the edge's `PayoutRef` id as the `providerRef`, `INDETERMINATE` throws a retryable fault so the sweep re-drives the same key, and `REJECTED` throws a terminal one. It also fills the port's optional `payoutStatus` probe from the edge's `status({ ref })`, and `edgeTiliaPayees` fills the payee directory the [`PAYEE_UNVERIFIED` gate](/economy/reference/operations/request-payout/) reads.
+The shim maps the edge's tri-state submit onto the port's throw contract. `ACCEPTED` returns the edge's `PayoutRef` id as the `providerRef`. `INDETERMINATE` throws a retryable fault, so the sweep re-drives the same key. `REJECTED` throws a terminal one. The shim also fills the port's optional `payoutStatus` probe from the edge's `status({ ref })`. `edgeTiliaPayees` fills the payee directory the [`PAYEE_UNVERIFIED` gate](/economy/reference/operations/request-payout/) reads.
 
-The package is an optional peer dependency: without it installed, the lab composes exactly as before with `httpProcessor` or your own adapter. How all three sibling packages enter the lab is owned by [the packages page](/economy/ports/packages/).
+The package is an optional peer dependency. Without it installed, the lab composes exactly as before with `httpProcessor` or your own adapter. [The packages page](/economy/ports/packages/) owns how both sibling packages enter the lab.
 
 ## How settlement comes back
 
-Submitting is only half the loop. The other half (did the money land, or did the seller dispute a purchase) comes back through inbound webhooks, not a return value.
+Submitting is only half the loop. The other half (did the money land, or did the buyer dispute a purchase) comes back later, through inbound webhooks — there is no return value to wait on.
 
-A settlement webhook drives the `SUBMITTED → SETTLED` step. The webhook edge maps the verified event to a <ApiLink to="variables/src.settlePayout" /> operation via `toSettlePayout`, which clears the saga and moves the gross USD out of trust. The provider's reported amount is recorded for reconciliation but never trusted as the posted figure.
+A settlement webhook drives the `SUBMITTED → SETTLED` step. The webhook edge maps the verified event to a <ApiLink to="variables/economy-lab.settlePayout" /> operation via `toSettlePayout`, which clears the saga and moves the gross USD out of trust. The provider's reported amount is recorded for reconciliation but never trusted as the posted figure.
 
-A failed payout comes back the same way, and promptly. The common real-world failure is asynchronous — the rail accepts a payout and only rejects it during processing (a rejected beneficiary, an unsupported destination) — so a verified `PayoutFailedEvent` maps to a [`reversePayout`](/economy/reference/operations/reverse-payout/) via `toReversePayout` with `providerReported` set. That waives the operation's still-live `SUBMITTED` refusal on the strength of the rail's own report, returning the seller's reserve as soon as the rail gives up rather than after the `maxPayoutAgeMs` timeout; the saga-state compare-and-set still stands down if a settle callback won the race.
+A failed payout comes back the same way, and promptly. The common real-world failure is asynchronous: the rail accepts a payout and only rejects it during processing (a rejected beneficiary, an unsupported destination). So a verified `PayoutFailedEvent` maps to a [`reversePayout`](/economy/reference/operations/reverse-payout/) via `toReversePayout` with `providerReported` set. That flag waives the operation's still-live `SUBMITTED` refusal on the strength of the rail's own report. The seller's reserve returns as soon as the rail gives up, rather than after the `maxPayoutAgeMs` timeout. The saga-state compare-and-set still stands down if a settle callback won the race.
 
 A dispute comes back the same way. A chargeback callback maps to a [`clawback`](/economy/reference/operations/clawback/) via `toClawback`, reclaiming the disputed credits from the user's spendable balance.
 
-Both inbound events are persisted, not posted inline. The webhook edge writes the mapped operation to a transactional inbox and returns a fast acknowledgment; the [apply worker](/economy/reference/background-worker/) submits it through the normal economy path on its next sweep, where invariants and idempotency are enforced. You can read more about that ingress on [the HTTP service page](/economy/reference/http-service/).
+Neither inbound event is posted inline. The webhook edge writes the mapped operation to a transactional inbox and returns a fast acknowledgment. The [apply worker](/economy/reference/background-worker/) submits it through the normal economy path on its next sweep, where invariants and idempotency are enforced. You can read more about that ingress on [the HTTP service page](/economy/reference/http-service/).
 
 ## What the core assumes
 
 The lab leans on the adapter to hold up two guarantees, because it can't check them from inside.
 
-- **At-most-once disbursement under retry.** The same `key` must never pay twice, however many times the worker resubmits. Both adapters honor this, the reference adapter by refusing to retry an ambiguous 2xx, the edge shim by threading the key into the rail's native idempotency field.
-- **A retryable failure throws, a permanent one is distinguishable.** The adapter must mark a transient problem (a dropped connection, a `5xx`, a `429`) retryable and a terminal one not; the worker decides by inspecting the thrown fault.
+- **At-most-once disbursement under retry.** The same `key` must never pay twice, however many times the worker resubmits. Both adapters honor this. The reference adapter refuses to retry an ambiguous 2xx. The edge shim threads the key into the rail's native idempotency field.
+- **A retryable failure throws, a permanent one is distinguishable.** The adapter must mark a transient problem (a dropped connection, a `5xx`, a `429`) retryable and a terminal one not. The worker decides by inspecting the thrown fault.
 
 ## Out of scope
 
-The port stops at "ask a provider to send money." Several things sit deliberately outside it.
+The port stops at "ask a provider to send money." Several things stay outside it.
 
-- **Beneficiary and KYC data.** The port carries only an opaque `userId`. Resolving it to bank or wallet details is the host's job, supplied through the adapter's own configuration.
-- **No real provider ships with the lab.** `httpProcessor` is the reference adapter and the edge shim delegates to a separately-shipped package. Wiring a provider, holding its credentials, and verifying its sandbox are the host's responsibility.
-- **The ledger.** An adapter asks the provider to move money; it never touches the lab's accounts. Every posting (the reserve, the settle, the dead-letter reversal) happens inside the economy, driven by the worker and the webhook edge.
+- **Beneficiary and KYC data.** The port carries only an opaque `userId`. The host resolves it to bank or wallet details, supplied through the adapter's own configuration.
+- **No real provider ships with the lab.** `httpProcessor` is the reference adapter, and the edge shim delegates to a separately-shipped package. The host wires a provider, holds its credentials, and verifies its sandbox.
+- **The ledger.** An adapter asks the provider to move money. It never touches the lab's accounts. Every posting (the reserve, the settle, the dead-letter reversal) happens inside the economy, driven by the worker and the webhook edge.

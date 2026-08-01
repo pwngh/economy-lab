@@ -6,7 +6,7 @@ order: 100
 status: stable
 sourceRefs:
   ['src/netting.ts · openInstanceSession', 'src/netting.ts · sharedReservations', 'test/netting.test.ts']
-apiRefs: ['modules/src_netting']
+apiRefs: ['modules/netting']
 related:
   [
     'economy/concepts/instance-economy',
@@ -16,31 +16,31 @@ related:
   ]
 ---
 
-Every operation through [the submit pipeline](/economy/reference/the-economy/) buys its guarantees with a database transaction. That price is right for a top-up or a cash out, and wrong for an in-world economy — one busy game instance can produce hundreds of small purchases a minute, each too small to be worth a commit of its own.
+Every operation through [the submit pipeline](/economy/reference/the-economy/) buys its guarantees with a database transaction. That price is right for a top-up or a cash-out, and wrong for an in-world economy. One busy game instance can produce hundreds of small purchases a minute. Each is too small to be worth a commit of its own.
 
-A netting session takes those movements the other way around: accept each one immediately against an in-memory screen, journal it durably in batches, and post the _net_ against the ledger once, on the economy service's own schedule.
+A netting session takes those movements the other way around. It accepts each one immediately against an in-memory screen (the affordability check run before a movement is accepted) and journals it durably in batches. It posts the _net_ against the ledger once, on the economy service's own schedule.
 
 ## The journal is the source of truth
 
-`record` takes a balanced set of legs with an idempotency key and accepts or rejects it: idempotent per key, affordable per the reservation registry, durable per journal batch. Accepted movements land in the session journal — never only in session memory — and the journal's rows are hash-chained per session, the same construction the [ledger's integrity layer](/economy/concepts/integrity/) uses. Rejections carry the ordinary [reason codes](/economy/reference/outcomes-and-reason-codes/).
+`record` takes a balanced set of legs with an idempotency key and accepts or rejects it. Acceptance is idempotent per key, affordable per the reservation registry, and durable per journal batch. Accepted movements land in the session journal, never only in session memory. The journal's rows are hash-chained per session, the same construction the [ledger's integrity layer](/economy/concepts/integrity/) uses. Rejections carry the ordinary [reason codes](/economy/reference/outcomes-and-reason-codes/).
 
-The registry is what makes "affordable" honest across movements that haven't settled yet: it tracks each account's pending spend, so a buyer cannot promise the same credits to two sessions. One registry is shared per process (`createReservations`); a multi-node deployment shares one through the store (`sharedReservations`) — see [cluster nodes](/economy/concepts/cluster/).
+The registry is what makes "affordable" honest across movements that haven't settled yet. It tracks each account's pending spend, so a buyer cannot promise the same credits to two sessions. One registry is shared per process (`createReservations`). A multi-node deployment shares one through the store (`sharedReservations`) — see [cluster nodes](/economy/concepts/cluster/).
 
 ## Settle folds the tab
 
 <SessionNetting />
 
-`settle` derives the net from the journal — not from memory — verifies the session's chain, and posts the result in clearing chunks through `NETTING_CLEARING`, bounded by `chunkWidth` so no chunk locks more accounts than the store can hold at once. The settlement posting anchors the journal's final head, so tamper-evidence extends from the proved ledger down to every individual movement.
+`settle` derives the net from the journal, not from memory. It verifies the session's chain, then posts the result in clearing chunks through `NETTING_CLEARING`. `chunkWidth` bounds each chunk — no chunk locks more accounts than the store can hold at once. The settlement posting anchors the journal's final head, so tamper-evidence extends from the proved ledger down to every individual movement.
 
 ## A session settles once
 
-A session's settlement transaction ids derive from its session id, so settling the same id twice would collide with its own chunks and silently strand later movements. The session enforces this: `record` on a settled session throws `SESSION.SETTLED`, `wasSettled()` reports the state, and `recoverSession` probes for settlement evidence before accepting anything.
+A session's settlement transaction ids derive from its session id, so settling the same id twice would collide with its own chunks and silently strand later movements. The session enforces this. `record` on a settled session throws `SESSION.SETTLED`. `wasSettled()` reports the state, and `recoverSession` probes for settlement evidence before accepting anything.
 
-A long-lived scope therefore never re-settles a session — it rotates epochs. Settle `sess:<scope>:<n>` while `sess:<scope>:<n+1>` records; `epochMinter` mints the ids. The [instance economy](/economy/concepts/instance-economy/) automates the rotation.
+A long-lived scope therefore never re-settles a session — it rotates epochs. Settle `sess:<scope>:<n>` while `sess:<scope>:<n+1>` records. `epochMinter` mints the ids. The [instance economy](/economy/concepts/instance-economy/) automates the rotation.
 
 ## The trade is explicit
 
-Sessions are opt-in because they move enforcement. Per-movement checks run at the session (and become database-final at settle), and movements bypass the submit pipeline's [maturity gate](/economy/concepts/credit-maturity/) — a caller that needs that gate screens before building legs. The [instance economy](/economy/concepts/instance-economy/) layers the production screens (per-buyer caps, matured-funds parking) on top of the raw session.
+Sessions are opt-in because they move enforcement. Per-movement checks run at the session, and become database-final at settle. Movements bypass the submit pipeline's [maturity gate](/economy/concepts/credit-maturity/). A caller that needs that gate screens before building legs. The [instance economy](/economy/concepts/instance-economy/) layers the production screens (per-buyer caps, matured-funds parking) on top of the raw session.
 
 ## A session by hand
 
@@ -65,4 +65,4 @@ await session.record({
 await session.settle(); // this tier's schedule: cadence, backlog, timeout, or scope close
 ```
 
-A game server is not the caller here. The session lives in the economy service — the process holding the store, the journal, and the registry — and game servers are unprivileged callers that request movements. A world instance is a natural _key_ for a session, never its owner.
+A game server is not the caller here. The session lives in the economy service, the process holding the store, the journal, and the registry. Game servers are unprivileged callers that request movements. A world instance is a natural _key_ for a session, never its owner.

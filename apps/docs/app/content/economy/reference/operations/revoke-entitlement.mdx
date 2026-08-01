@@ -5,31 +5,32 @@ order: 110
 status: stable
 sourceRefs:
   [
-    'src/operations/entitlements.ts#L69-L90 · revokeEntitlement',
-    'src/operations/registry.ts#L66 · REGISTRY',
+    'src/operations/entitlements.ts#L61-L82 · revokeEntitlement',
+    'src/operations/registry.ts#L61 · REGISTRY',
   ]
-apiRefs: ['variables/src.revokeEntitlement']
+apiRefs: ['variables/economy-lab.revokeEntitlement']
 related:
   ['economy/reference/operations/spend', 'economy/reference/operations/refund']
 ---
 
 import revokeEntitlementHttp from '../../../../snippets/http/revoke-entitlement.sh?shiki';
 
-<ApiLink to="variables/src.revokeEntitlement" /> removes a user's ownership of a SKU, the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the ledger is untouched.
+<ApiLink to="variables/economy-lab.revokeEntitlement" /> removes a user's ownership of a SKU. It is the mirror of [`grantEntitlement`](/economy/reference/operations/grant-entitlement/). Ownership is a record, not a balance. No money moves, and the operation leaves the ledger untouched.
 
 You name the user and the SKU, and optionally a `reason` for the audit trail:
 
 <CallTabs name="revoke-entitlement" http={revokeEntitlementHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'revokeEntitlement',
-  idempotencyKey: 'idem_revoke_1',
-  actor: { kind: 'system', service: 'fulfillment' },
-  userId: 'usr_owner',
-  sku: 'wrld_pass',
-  reason: 'chargeback',
-});
+const outcome = await economy.submit(
+  revokeEntitlement({
+    idempotencyKey: 'revoke_usr_owner_wrld_pass',
+    actor: systemActor('fulfillment'),
+    userId: 'usr_owner',
+    sku: 'wrld_pass',
+    reason: 'chargeback', // optional
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
@@ -37,13 +38,21 @@ const outcome = await economy.submit({
 
 Once this commits, [`read.entitled("usr_owner", "wrld_pass")`](/economy/reference/reads/) returns `false`. Any UI that gates access on that SKU stops granting it.
 
+The one business decline is a user who never owned the SKU:
+
+```ts
+if (outcome.status === 'rejected' && outcome.detail.reason === 'NOT_ENTITLED') {
+  const { userId, sku } = outcome.detail; // which ownership check came back empty
+}
+```
+
 ## Parameters
 
 The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                       | Default    | Description                                                                                                                 |
 | ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                    |
+| `idempotencyKey` | `string`                                                   | (required) | Same-key retries run at most once. See [idempotency](/economy/concepts/idempotency/).                    |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`, see [Authorization](#authorization).                                         |
 | `userId`         | `string`                                                   | (required) | The user losing ownership. A blank or whitespace-only value throws.                                                         |
 | `sku`            | `string`                                                   | (required) | The item or feature code to revoke, such as `"wrld_pass"`. A blank or whitespace-only value throws.                         |
@@ -63,13 +72,13 @@ The `committed` [`transaction`](/economy/concepts/accounts-and-double-entry/) is
 
 None. Entitlements track ownership only, so `revokeEntitlement` writes no [double-entry posting](/economy/concepts/accounts-and-double-entry/) and touches no account.
 
-The handler drops the ownership record through `unit.entitlements.revoke`. The returned `transaction` carries empty leg and link lists.
+The handler drops the ownership record through `unit.entitlements.revoke`. This is the operator door and it names no source, so it drops every grant on the SKU, whatever bought or subscribed for it. The returned `transaction` carries empty leg and link lists.
 
 ## Authorization
 
-`revokeEntitlement` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it, see [actors and authorization](/economy/concepts/actors-and-authorization/).
+`revokeEntitlement` is platform-initiated only. An end user (`actor.kind === "user"`) may never run it. See [actors and authorization](/economy/concepts/actors-and-authorization/).
 
-A revoke names an arbitrary `userId` the caller need not own. It also posts no debit the ownership check could catch. So it is gated up front: only a `system` service or a human `operator` may call it.
+A revoke names an arbitrary `userId` the caller need not own. It also posts no debit the ownership check could catch. So the engine gates it up front. Only a `system` service or a human `operator` may call it.
 
 A `user` actor is declined with an `AUTH.UNAUTHORIZED` fault before any work begins.
 
@@ -95,6 +104,6 @@ A blank field would revoke against a phantom user or SKU, so a malformed request
 
 The handler checks ownership before it revokes. It calls `entitlements.owns(userId, sku)` and returns `NOT_ENTITLED` when the user does not hold the SKU.
 
-Revoking is idempotent through the `idempotencyKey`. A retry under the same key returns the first result as `duplicate` rather than re-running.
+A retry under the same key returns the first result as `duplicate` rather than re-running.
 
 The ledger's money invariants ([conservation, no-overdraft, and backing](/economy/concepts/integrity/)) are unaffected, because this operation moves no money.

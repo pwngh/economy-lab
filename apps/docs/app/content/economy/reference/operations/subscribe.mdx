@@ -5,10 +5,10 @@ order: 80
 status: stable
 sourceRefs:
   [
-    'src/operations/subscribe.ts#L53 · subscribe',
-    'src/worker/subscriptions.ts#L68 · sweepDueSubscriptions',
+    'src/operations/subscribe.ts#L55 · subscribe',
+    'src/worker/subscriptions.ts#L70 · sweepDueSubscriptions',
   ]
-apiRefs: ['variables/src.subscribe']
+apiRefs: ['variables/economy-lab.subscribe']
 related:
   [
     'economy/reference/operations/cancel-subscription',
@@ -18,7 +18,7 @@ related:
 
 import subscribeHttp from '../../../../snippets/http/subscribe.sh?shiki';
 
-<ApiLink to="variables/src.subscribe" /> does three things in one transaction. It charges a buyer for the first period
+<ApiLink to="variables/economy-lab.subscribe" /> does three things in one transaction. It charges a buyer for the first period
 of a recurring plan, grants them the SKU, and saves a
 [`Subscription`](/economy/concepts/subscriptions/) record. The
 [background worker](/economy/reference/background-worker/) renews that record every later
@@ -30,16 +30,17 @@ length in milliseconds:
 <CallTabs name="subscribe" http={subscribeHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'subscribe',
-  idempotencyKey: 'idem_1',
-  actor: { kind: 'user', userId: 'usr_a' },
-  userId: 'usr_a',
-  sellerId: 'usr_s',
-  sku: 'club_pass',
-  price: toAmount('CREDIT', 50_000n),
-  periodMs: 2_592_000_000,
-});
+const outcome = await economy.submit(
+  subscribe({
+    idempotencyKey: 'sub_usr_a_club_pass',
+    actor: userActor('usr_a'),
+    userId: 'usr_a',
+    sellerId: 'usr_s',
+    sku: 'club_pass',
+    price: credits(500), // per period
+    periodMs: 2_592_000_000, // 30 days
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
@@ -48,6 +49,22 @@ const outcome = await economy.submit({
 The handler bills period one only. Every period after that, the worker's renewal sweep
 bills the buyer again.
 
+A decline arrives as a `rejected` outcome rather than a throw. Narrow on `detail.reason`:
+
+```ts
+if (outcome.status === 'rejected') {
+  if (outcome.detail.reason === 'ALREADY_SUBSCRIBED') {
+    const { userId, sku } = outcome.detail; // the ACTIVE record that would double-bill
+  }
+  if (outcome.detail.reason === 'INSUFFICIENT_FUNDS') {
+    const { need, have } = outcome.detail; // the first period's real figures
+  }
+  if (outcome.detail.reason === 'FUNDS_IMMATURE') {
+    const readyAt = outcome.detail.availableAt; // retry the same key after this
+  }
+}
+```
+
 ## Parameters
 
 Every field below is required; `subscribe` carries no optional payload. The payload
@@ -55,7 +72,7 @@ fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                       | Default    | Description                                                               |
 | ---------------- | ---------------------------------------------------------- | ---------- | ------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/). |
+| `idempotencyKey` | `string`                                                   | (required) | A retry with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/). |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. A `user` actor may run `subscribe` only for their own wallet: the buyer `userId` must match the actor. |
 | `userId`         | `string`                                                   | (required) | The buyer. Must differ from `sellerId`.                                   |
 | `sellerId`       | `string`                                                   | (required) | The seller who earns the price.                                           |
@@ -85,11 +102,13 @@ The first-period charge posts as one balanced
 [`Transaction`](/economy/concepts/accounts-and-double-entry/). Its legs depend on how the
 price splits between the buyer's [`promo`](/economy/concepts/accounts-and-double-entry/)
 grant and their [`spendable`](/economy/concepts/accounts-and-double-entry/) balance. Promo
-covers as much as it can, and spendable covers the rest.
+covers as much as it can, and spendable covers the rest. Only the first charge works this
+way — renewals never draw promo, because a promo grant is a one-time marketing gift with
+an expiry, not a standing funding source.
 
-The platform fee is charged on the spendable-funded part. The buyer's `spendable` is debited
-that part in full. The seller's [`earned`](/economy/concepts/accounts-and-double-entry/)
-is credited the net, and [`REVENUE`](/economy/concepts/accounts-and-double-entry/) takes the
+The platform charges its fee on the spendable-funded part. The handler debits the buyer's
+`spendable` for that part in full. The seller's [`earned`](/economy/concepts/accounts-and-double-entry/)
+receives the net, and [`REVENUE`](/economy/concepts/accounts-and-double-entry/) takes the
 fee:
 
 | Account              | Side   | Amount                 |
@@ -98,8 +117,8 @@ fee:
 | `earned(sellerId)`   | credit | `spendable part − fee` |
 | `SYSTEM.REVENUE`     | credit | `fee`                  |
 
-The promo-funded part pays the seller real earnings out of platform revenue, with the
-buyer's drawn-down grant offset against the outstanding promo float. Promo credit
+The promo-funded part pays the seller real earnings out of platform revenue. The buyer's
+drawn-down grant offsets against the outstanding promo float. Promo credit
 never reaches the seller as promo. The fee applies only to the spendable part, matching
 [`spend`](/economy/reference/operations/spend/):
 
@@ -111,7 +130,7 @@ never reaches the seller as promo. The fee applies only to the spendable part, m
 | `earned(sellerId)`   | credit | `promo part` |
 
 The fee comes from [`feeForPrice`](/economy/ports/pricing/) at `platformFeeBps`, rounded up
-to a whole credit and capped at the charge — the same call `spend` and every renewal make, so
+to a whole credit and capped at the charge. `spend` and every renewal make the same call, so
 the rounding is identical.
 
 <Callout type="note">
@@ -126,7 +145,7 @@ just billed. A rolled-back charge rolls back the grant too.
 ## Authorization
 
 A [`user`](/economy/concepts/actors-and-authorization/) actor may run `subscribe` only for
-their own wallet: the buyer `userId` must match the actor. The ownership check covers the
+their own wallet. The buyer `userId` must match the actor. The ownership check covers the
 two accounts the charge debits: `userId:promo` and `userId:spendable`.
 
 A `system` or `operator` actor may subscribe on any buyer's behalf. `subscribe` is not a
@@ -150,7 +169,7 @@ A malformed request throws instead:
 | Code           | When                                                       |
 | -------------- | ---------------------------------------------------------- |
 | `OP.MALFORMED` | A buyer subscribing to themselves.                         |
-| `OP.MALFORMED` | A `price` that isn't `CREDIT`, or one outside the credit band. |
+| `OP.MALFORMED` | A `price` that isn't `CREDIT`, or one outside the configured price band. |
 | `OP.MALFORMED` | A non-positive or oversized `periodMs`.                    |
 | `OP.MALFORMED` | A blank `sku`.                                             |
 

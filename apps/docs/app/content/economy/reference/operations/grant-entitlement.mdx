@@ -5,22 +5,22 @@ order: 100
 status: stable
 sourceRefs:
   [
-    'src/operations/entitlements.ts#L42 · grantEntitlement',
-    'src/operations/registry.ts#L65 · REGISTRY',
-    "src/contract.ts#L136 · kind 'grantEntitlement'",
-    'src/contract.ts#L46 · EntitlementAttributes',
-    'src/economy.ts#L1313 · RESTRICTED_TO_PRIVILEGED',
+    'src/operations/entitlements.ts#L36 · grantEntitlement',
+    'src/operations/registry.ts#L61 · REGISTRY',
+    "src/contract.ts#L168 · kind 'grantEntitlement'",
+    'src/contract.ts#L47 · EntitlementAttributes',
+    'src/economy.ts#L1453 · RESTRICTED_TO_PRIVILEGED',
   ]
-apiRefs: ['variables/src.grantEntitlement']
+apiRefs: ['variables/economy-lab.grantEntitlement']
 related: ['economy/reference/operations/revoke-entitlement']
 ---
 
 import grantEntitlementHttp from '../../../../snippets/http/grant-entitlement.sh?shiki';
 
-<ApiLink to="variables/src.grantEntitlement" /> records that a user owns an item or feature, named by a `sku` (a product code such
+<ApiLink to="variables/economy-lab.grantEntitlement" /> records that a user owns an item or feature, named by a `sku` (a product code such
 as `wrld_pass`). It tracks ownership only. No money moves, and the ledger is untouched.
 
-A <ApiLink to="variables/src.spend" /> grants the buyer's entitlement as part of the sale. You reach for `grantEntitlement`
+A <ApiLink to="variables/economy-lab.spend" /> grants the buyer's entitlement as part of the sale. You reach for `grantEntitlement`
 directly when ownership comes from somewhere else: a manual fulfillment, a migration, or a comp.
 
 You name the user and the SKU. The actor is a trusted `system` service or a human `operator`:
@@ -28,13 +28,21 @@ You name the user and the SKU. The actor is a trusted `system` service or a huma
 <CallTabs name="grant-entitlement" http={grantEntitlementHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'grantEntitlement',
-  idempotencyKey: 'idem_0',
-  actor: { kind: 'system', service: 'fulfillment' },
-  userId: 'usr_owner',
-  sku: 'wrld_pass',
-});
+const outcome = await economy.submit(
+  grantEntitlement({
+    idempotencyKey: 'comp_usr_owner_wrld_pass',
+    actor: systemActor('fulfillment'),
+    userId: 'usr_owner',
+    sku: 'wrld_pass',
+    attrs: {
+      // optional — omit entirely to record the bare ownership fact
+      quantity: 1, // optional
+      version: 3, // optional
+      expiresAt: null, // optional — epoch ms, or null for "never expires"
+      source: 'support_comp', // optional
+    },
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
@@ -42,7 +50,7 @@ const outcome = await economy.submit({
 
 `read.entitled("usr_owner", "wrld_pass")` now returns true.
 
-The grant always succeeds: it overwrites any prior record for the user and SKU, and checks no balance.
+The grant always succeeds. It overwrites any prior record for the user, SKU and `attrs.source`, and it checks no balance.
 
 ## Parameters
 
@@ -50,22 +58,24 @@ The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                   | Default    | Description                                                                                            |
 | ---------------- | ------------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------ |
-| `idempotencyKey` | `string`                                               | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/). |
+| `idempotencyKey` | `string`                                               | (required) | A retry with the same key runs once. See [idempotency](/economy/concepts/idempotency/). |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. Must be `system` or `operator`.                                                         |
 | `userId`         | `string`                                               | (required) | The user who gains ownership. Must be non-empty after trimming whitespace.                             |
 | `sku`            | `string`                                               | (required) | The item or feature owned. Must be non-empty after trimming whitespace.                                |
-| `attrs`          | <ApiLink to="types/src.EntitlementAttributes" />                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
+| `attrs`          | <ApiLink to="types/economy-lab.EntitlementAttributes" />                                     | `{}`       | Optional details stored with the grant (see below).                                                    |
 
 `EntitlementAttributes` carries four optional fields: `quantity` (a count), `version` (a number),
 `expiresAt` (an instant in epoch milliseconds, or `null` for "never expires"), and `source` (a free
 string). Omit `attrs` entirely to record the bare ownership fact without inventing defaults.
 
 <Callout type="note">
-  The core stores `attrs` with the grant; it does not act on them. `expiresAt`,
-  for example, is kept as data. No
-  [sweep](/economy/reference/background-worker/) expires an entitlement the way
-  the worker expires a promo grant. Reading and enforcing these fields is the
-  host's job.
+  The core stores `attrs` with the grant, and it enforces only one of them:
+  `expiresAt`. The entitlement store applies it at read time:
+  [`read.entitled`](/economy/reference/reads/) reports `true` only while the
+  moment has not passed (the check is inclusive). No
+  [sweep](/economy/reference/background-worker/) revokes an expired grant the
+  way the worker reverses an expired promo — the grant stops reading as owned. `quantity`, `version`, and `source` stay pure data. Reading and
+  enforcing those is the host's job.
 </Callout>
 
 ## Returns
@@ -75,41 +85,40 @@ string). Omit `attrs` entirely to record the bare ownership fact without inventi
 - `committed`: the ownership record was written. The
   [`transaction`](/economy/concepts/accounts-and-double-entry/) is a marker with a fresh id and commit
   time. Its `legs` and `links` are empty, since nothing posted to the ledger.
-- `duplicate`: the `idempotencyKey` was already used; the earlier outcome is returned unchanged and
-  the record is not rewritten.
+- `duplicate`: a repeat key. The earlier outcome comes back unchanged and the record is not
+  rewritten.
 
-`grantEntitlement` returns no `rejected` outcome. A well-formed grant on a healthy system always
-commits. A malformed request throws instead; see [reason codes](#reason-codes).
+There is no `rejected` outcome — a well-formed grant on a healthy system always commits, and a
+malformed one throws (see [reason codes](#reason-codes)).
 
 ## Postings
 
 None. `grantEntitlement` changes ownership, not money, so it posts no double-entry legs.
 
-The committed `transaction` is a lifecycle marker: a receipt that an operation ran, with empty `legs`
-and `links` lists. Ownership lives in its own record, keyed by user and SKU, that the ledger never
-touches. You read it back with [`read.entitled`](/economy/reference/reads/).
+The committed `transaction` is a lifecycle marker. It is a receipt that an operation ran, with empty `legs`
+and `links` lists. Ownership lives in its own record, keyed by user and SKU. The ledger never
+touches that record. You read it back with [`read.entitled`](/economy/reference/reads/).
 
 ## Authorization
 
 `grantEntitlement` is restricted to a privileged `Actor`: a trusted `system` service or a human
 `operator`.
 
-An end `user` can never grant ownership. A `user` principal is refused with a thrown `AUTH.UNAUTHORIZED`
-before the handler runs. Granting names a `userId` the caller need not own and posts no debit, so the
+An end `user` can never grant ownership. The gate refuses a `user` principal with a thrown `AUTH.UNAUTHORIZED`
+before the handler runs. A grant names a `userId` the caller need not own, and it posts no debit. So the
 gate stands in for the ownership check the posting path would otherwise apply.
 
 ## Reason codes
 
-`grantEntitlement` returns no reason codes: it has no `rejected` path. It fails only by throwing.
-Each fault marks a broken request rather than an expected decline:
+No reason codes here; the only failures are thrown faults, each marking a broken request:
 
 | Code                  | When                                                                                                                                                 |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `AUTH.UNAUTHORIZED`   | The `actor` is a `user`. Granting is `system`- or `operator`-only.                                                                                   |
 | `OP.MALFORMED`        | `userId` or `sku` is blank or whitespace; or `attrs.expiresAt` is present and not finite; or `attrs.quantity` is present and not a positive integer. |
 
-The blank-field check lives in the handler because an entitlement posts to no wallet account, so the
-central blank-owner guard (which only inspects accounts an operation debits) never sees these fields.
+The blank-field check lives in the handler because an entitlement posts to no wallet account. The
+central blank-owner guard only inspects accounts an operation debits, so it never sees these fields.
 
 ## Preconditions and invariants
 
@@ -118,6 +127,7 @@ central blank-owner guard (which only inspects accounts an operation debits) nev
 - `userId` and `sku` are each non-empty after trimming, so ownership is never recorded against a
   phantom user or of nothing.
 - The grant is idempotent on `idempotencyKey`: a retried submit writes the record at most once.
-- The grant is a full overwrite. Re-granting the same user and SKU with new `attrs` replaces the prior
-  record; there is no merge and no append.
+- The grant is a full overwrite of one source's record. Re-granting the same user, SKU and `attrs.source`
+  with new `attrs` replaces that record; a different `source` records a second grant beside it, which is
+  how a SKU bought twice is owned twice. There is no merge within a source.
 - No balance moves, so the ledger stays balanced and conserved.

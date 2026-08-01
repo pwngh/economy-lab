@@ -6,11 +6,11 @@ status: stable
 sourceRefs:
   [
     'src/operations/topUp.ts#L36 · topUp',
-    'src/operations/registry.ts#L58 · REGISTRY',
-    "src/contract.ts#L68 · kind 'topUp'",
-    'src/webhooks.ts#L154 · toTopUp',
+    'src/operations/registry.ts#L61 · REGISTRY',
+    "src/contract.ts#L98 · kind 'topUp'",
+    'src/webhooks.ts#L158 · toTopUp',
   ]
-apiRefs: ['variables/src.topUp']
+apiRefs: ['variables/economy-lab.topUp']
 related:
   [
     'economy/reference/operations/spend',
@@ -21,7 +21,7 @@ related:
 
 import topUpHttp from '../../../../snippets/http/top-up.sh?shiki';
 
-<ApiLink to="variables/src.topUp" /> turns a buyer's cleared cash into spendable credit. It raises a user's
+<ApiLink to="variables/economy-lab.topUp" /> turns a buyer's cleared cash into spendable credit. It raises a user's
 [`spendable`](/economy/concepts/accounts-and-double-entry/) balance and records the USD that paid for
 it.
 
@@ -31,21 +31,30 @@ buyer. You name the user, the credit `amount`, and the funding `source`:
 <CallTabs name="top-up" http={topUpHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'topUp',
-  idempotencyKey: 'idem_0',
-  actor: { kind: 'system', service: 'payments' },
-  userId: 'usr_buyer',
-  amount: toAmount('CREDIT', 5_000n),
-  source: 'card',
-});
+const outcome = await economy.submit(
+  topUp({
+    idempotencyKey: 'purchase_evt_5521',
+    actor: systemActor('payments'),
+    userId: 'usr_buyer',
+    amount: credits(600), // the platform's $5 bundle
+    source: 'card',
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
 </CallTabs>
 
-The credit `amount` is what the user receives. What they paid in USD is derived from the
-[`buy` rate](/economy/concepts/money-model/), not passed in.
+The credit `amount` is what the user receives. The engine derives what they paid in USD from the
+[`buy` rate](/economy/concepts/money-model/). The caller does not pass it in.
+
+The one business decline is the velocity gate. It comes back as data, and its `detail` names the tripped window:
+
+```ts
+if (outcome.status === 'rejected' && outcome.detail.reason === 'RISK_DENIED') {
+  const { window, limitMinor } = outcome.detail; // 'inflow' here — the card-testing gate
+}
+```
 
 ## Parameters
 
@@ -60,16 +69,16 @@ The payload fields, beyond the `kind` tag, are:
 | `source`         | `string`                                               | (required) | The funding rail (`card`, `steam`, …). Selects the credits' maturity horizon and must be non-empty after trimming whitespace. |
 
 The `source` sets how long the new credits are held before they can be
-spent or cashed out, see [maturity](/economy/concepts/credit-maturity/). An unrecognized `source` falls
+spent or cashed out. See [maturity](/economy/concepts/credit-maturity/). An unrecognized `source` falls
 back to the long default horizon, never a fast one.
 
 ### The purchase catalog
 
 With [`TOP_UP_BUNDLES_MINOR`](/economy/reference/configuration/#the-purchase-catalog) set, the
-platform sells fixed bundles and `amount` must be one of them; any other amount faults
-`OP.MALFORMED`, because a store client offering an off-catalog amount is miswired, not a user
-declining. Unset — the default, and how the examples on this page run — any positive amount is
-accepted.
+platform sells fixed bundles, and `amount` must be one of them. Any other amount faults
+`OP.MALFORMED`. A store client offering an off-catalog amount is miswired, not a user
+declining. When the variable is unset, any positive amount is accepted. Unset is the default,
+and it is how the examples on this page run.
 
 ## Returns
 
@@ -79,7 +88,7 @@ accepted.
   credits going up).
 - `duplicate`: the `idempotencyKey` was already used. The earlier transaction is returned unchanged,
   and nothing new posts.
-- `rejected`: a velocity or maintenance-window decline; see [reason codes](#reason-codes).
+- `rejected`: a velocity decline; see [reason codes](#reason-codes).
 
 ## Postings
 
@@ -95,9 +104,9 @@ all credits in circulation:
 | `SYSTEM.STORED_VALUE` | debit  | `amount` (CREDIT) |
 | `spendable(userId)`   | credit | `amount` (CREDIT) |
 
-The second posting accounts for the cash the buyer paid. The USD splits two ways. The backing value
-(`amount × par`) is held in `TRUST_CASH` to cover the new credits. The buy-vs-par gap (the
-[platform spread](/economy/concepts/money-model/)) is recognized as revenue in `REVENUE_USD`:
+The second posting accounts for the cash the buyer paid. The USD splits two ways. `TRUST_CASH`
+holds the backing value (`amount × par`) to cover the new credits. `REVENUE_USD` recognizes the
+buy-vs-par gap (the [platform spread](/economy/concepts/money-model/)) as revenue:
 
 | Account               | Side   | Amount                               |
 | --------------------- | ------ | ------------------------------------ |
@@ -108,25 +117,27 @@ The second posting accounts for the cash the buyer paid. The USD splits two ways
 The `REVENUE_USD` leg posts only when the margin is positive. An exact-par purchase (no spread) stays
 a two-leg cash move.
 
-Both conversions round up — the backing so `TRUST_CASH` always covers the spendable balance at par,
-the gross so the margin never goes negative. The cost is at most one minor unit.
+Both conversions round up. The backing rounds up so `TRUST_CASH` always covers the spendable
+balance at par. The gross rounds up so the margin never goes negative. The cost is at most one
+minor unit.
 
 <Callout type="note">
-  The CREDIT `REVENUE` account is untouched by a top-up, so it keeps meaning
+  A top-up leaves the CREDIT `REVENUE` account untouched, so it keeps meaning
   transaction fees only. The newly issued credits offset against `STORED_VALUE`,
   not `REVENUE`. The external app-store cut and VAT happen at the cash-in rail
-  before this ledger sees the purchase, and aren't modeled.
+  before this ledger sees the purchase. The ledger does not model them.
 </Callout>
 
 ## Authorization
 
-`topUp` is restricted to a privileged [`Principal`](/economy/concepts/actors-and-authorization/): a
-trusted `system` service (the verified payment path) or a human `operator`. It mints spendable
-credit, so an end user can never issue one: a `user` principal is rejected with `AUTH.UNAUTHORIZED`.
+Only a privileged [`Principal`](/economy/concepts/actors-and-authorization/) may call `topUp`.
+That means a trusted `system` service (the verified payment path) or a human `operator`. It mints
+spendable credit, so an end user can never issue one. The engine rejects a `user` principal with
+`AUTH.UNAUTHORIZED`.
 
-In production, the `system` top-up is driven by a verified [processor](/economy/ports/processor/)
-webhook. `toTopUp` builds the operation from a cleared `PurchaseEvent`, keyed off the provider's
-`eventId` so a replayed webhook dedupes.
+In production, a verified [processor](/economy/ports/processor/) webhook drives the `system`
+top-up. `toTopUp` builds the operation from a cleared `PurchaseEvent`. It keys the operation off
+the provider's `eventId`, so a replayed webhook dedupes.
 
 ## Reason codes
 
@@ -137,7 +148,7 @@ A `topUp` can return one [reason code](/economy/reference/outcomes-and-reason-co
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RISK_DENIED` | The user's recent top-up volume crossed the configured velocity limit. A top-up counts against the same per-user velocity window as a spend. |
 
-The pause gate applies only to `user` actors, and a `user` can't call `topUp`, so a top-up is
+The pause gate applies only to `user` actors, and a `user` can't call `topUp`. So a top-up is
 never declined with `ECONOMY_PAUSED`.
 
 A malformed request throws instead:
@@ -151,11 +162,11 @@ A malformed request throws instead:
 
 A top-up holds the books straight on both currencies:
 
-- The `amount` must be `CREDIT` and strictly positive; a wrong currency or non-positive amount throws.
+- The `amount` must be `CREDIT` and strictly positive. A wrong currency or non-positive amount throws.
 - Both postings net to zero within their currency, so the ledger stays
   [balanced](/economy/concepts/accounts-and-double-entry/) and conserved.
 - `TRUST_CASH` rises by at least `amount × par`, so the credits are
-  [backed](/economy/concepts/solvency/) the moment they're issued: trust cash always covers the
+  [backed](/economy/concepts/solvency/) the moment they're issued. Trust cash always covers the
   spendable balance valued at par.
 - The new credits carry their `source` and top-up time as a lot, which fixes when they
   [mature](/economy/concepts/credit-maturity/) and become spendable and payable.

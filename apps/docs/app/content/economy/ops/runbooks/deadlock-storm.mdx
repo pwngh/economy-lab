@@ -4,29 +4,34 @@ summary: 'A burst of lock conflicts absorbed inside the retry budget — invisib
 plain: 'Lots of requests fighting over the same database rows at once. The engine quietly retries and everyone still succeeds, but the watchdog reports the pressure so you can fix the crowd before the retries stop being enough.'
 order: 9
 status: stable
-sourceRefs: ['src/ops/detect.ts', 'src/ops/supervisor.ts', 'src/engines/sql-shared.ts']
+sourceRefs:
+  [
+    'src/supervisor/detect.ts · detectDeadlockStorm',
+    'src/supervisor/supervisor.ts · createSupervisor',
+    'src/engines/sql-shared.ts · withTransientRetry',
+  ]
 related: ['economy/ops/runbooks/retry-exhaustion', 'economy/concepts/concurrency', 'economy/concepts/platform-sharding']
 ---
 
-Tier 3, report-only. The engine is absorbing a burst of lock conflicts inside its retry
-budget.
+This is a [Tier 3](/economy/ops/the-supervisor/) signature, report-only. The engine is absorbing a burst of lock conflicts
+inside its retry budget.
 
 ## Symptoms
 
-Submit latency rises while the error rate stays flat — the retries are invisible to callers.
-Nothing fails on its own; the pressure shows only in telemetry.
+Submit latency rises while the error rate stays flat. The retries are invisible to callers.
+Nothing fails on its own. The pressure shows only in telemetry.
 
 ## Detection
 
-Sum of the `engine.retry` count (any outcome) over `deadlockWindowMs` (default 60s) reaches
-`deadlockThreshold` (default 20). The metric is tagged `engine` and `outcome`; this signature
-fires on volume, not on failures — failures are
+The detector sums the `engine.retry` count (any outcome) over `deadlockWindowMs` (default
+60s). A sum that reaches `deadlockThreshold` (default 20) is a finding. The metric is tagged
+`engine` and `outcome`. This signature fires on volume, not on failures. Failures belong to
 [retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/).
 
 ## Automatic response
 
-One `detected` + `decided` advisory pair per window, then silence until the next window. The
-supervisor never acts on a storm: the retry budget is already the remediation.
+The supervisor emits one `detected` + `decided` advisory pair per window, then stays silent
+until the next window. It never acts on a storm. The retry budget is already the remediation.
 
 ## Manual steps
 
@@ -43,5 +48,5 @@ supervisor never acts on a storm: the retry budget is already the remediation.
 ## Escalation
 
 Escalate to the ledger owner when storms recur outside load spikes, or when
-[retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/) starts firing alongside — the
-budget no longer absorbs the conflicts and callers are failing.
+[retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/) starts firing alongside. At that
+point the budget no longer absorbs the conflicts, and callers are failing.

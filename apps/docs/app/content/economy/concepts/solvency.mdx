@@ -6,9 +6,9 @@ order: 40
 status: stable
 sourceRefs:
   [
-    'src/integrity.ts#L120-L128 · backed',
-    'src/reconcile.ts',
-    'src/accounts.ts#L332-L344 · classify',
+    'src/integrity.ts#L121-L129 · backed',
+    'src/reconcile.ts · reconcile',
+    'src/accounts.ts#L327-L339 · classify',
   ]
 related:
   ['economy/concepts/payout-saga', 'economy/concepts/actors-and-authorization']
@@ -16,9 +16,9 @@ related:
 
 ## The idea
 
-Solvency is the promise that a user can always cash out. The platform keeps enough real dollars in trust to redeem every spendable credit at the [`par` rate](/economy/concepts/money-model/), set aside before the credit is issued.
+A user can always cash out — that is the promise solvency makes. The platform keeps enough real dollars in trust to redeem every spendable credit at the [`par` rate](/economy/concepts/money-model/), set aside before the credit is issued.
 
-You don't have to take that promise on faith. You can check it. After every operation, a backing check re-derives the answer straight from the ledger: it sums the credits users can spend, converts them to the USD they're owed, and weighs that against the cash actually on hand. What you get back is a single `backed` flag, and a `shortfall` when the cash falls short.
+You don't have to take that promise on faith. You can check it. After every operation, a backing check re-derives the answer straight from the ledger. It sums the credits users can spend, converts them to the USD they're owed, and weighs that against the cash actually on hand. What you get back is a single `backed` flag, and a `shortfall` when the cash falls short.
 
 ```ts
 const report = await economy.read.health();
@@ -28,25 +28,27 @@ report.shortfall; // an Amount in USD; zero when backed is true
 
 ## Why it exists
 
-Issue more spendable credits than there is cash set aside, and the books still balance: [conservation](/economy/concepts/integrity/) only says debits equal credits, not that real dollars stand behind them.
+Issue more spendable credits than there is cash set aside, and the books still balance. [Conservation](/economy/concepts/integrity/) only says debits equal credits, not that real dollars stand behind them.
 
 The gap stays invisible until users try to cash out and the trust account runs dry. Solvency turns the gap into a measured number that the [worker](/economy/reference/background-worker/) re-checks every cycle, so it never becomes a surprise at redemption time.
 
 ## The invariant
 
-The backing invariant is `trust_cash ≥ spendable credits × par`: the dollars in the trust account cover every credit a user can spend, valued at par. Which credits count matters in two ways: only spendable credits need backing, and the trust cash that backs them stays segregated from platform revenue.
+The backing invariant is `trust_cash ≥ spendable credits × par`: the dollars in the trust account cover every credit a user can spend, valued at par. Which credits count matters in two ways. Only spendable credits need backing, and the trust cash that backs them stays segregated from platform revenue.
 
-Only spendable credits need backing. [`classify`](/economy/concepts/accounts-and-double-entry/) tags exactly the user `spendable` balances as `custodial`, and everything else is `excluded` from the backing total.
+[`classify`](/economy/concepts/accounts-and-double-entry/) tags exactly the user `spendable` balances as `custodial`, and everything else is `excluded` from the backing total.
 
-The excluded credits are obligations owed in credits, not dollars, so they don't raise the cash the platform must hold. Three classes stay out of the backing total:
+The excluded credits are obligations owed in credits, not dollars. They don't raise the cash the platform must hold. Three classes stay out of the backing total:
 
-- Credits a seller has <ApiLink to="functions/src.earned" /> but not yet cashed out.
+- Credits a seller has <ApiLink to="functions/economy-lab.earned" /> but not yet cashed out.
 - Credits reserved for a payout in flight (`payout_reserve`).
 - Promo grants.
 
 The trust money stays segregated. The platform's margin from the buy-vs-par [spread](/economy/concepts/money-model/) lands in `revenue_usd`, not `trust_cash`, so it never enters the backing total.
 
-The platform gets paid only from the **surplus** — cash beyond what's owed to users; the fee sweep refuses any draw that would pull `trust_cash` below the requirement.
+The platform gets paid only from the **surplus**, the cash beyond what's owed to users. The fee sweep refuses any draw that would pull `trust_cash` below the requirement.
+
+The same surplus is where payout dollars come from. A [spend](/economy/reference/operations/spend/) moves credits from a buyer's `spendable` to a seller's `earned`. Earned credits sit outside the backing total, so the backing requirement drops while the trust cash holds still. That freed-up cash is the USD a later payout of those earned credits draws on.
 
 <Callout type="danger">
   The fee sweep enforces the backing floor at write time, not only in the audit.
@@ -58,7 +60,7 @@ The platform gets paid only from the **surplus** — cash beyond what's owed to 
 
 ## How it's enforced
 
-The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. <ApiLink to="functions/src.proveEconomy" /> runs it in three steps.
+The backing check never blocks a write. It's an audit that re-derives the position from the ledger after the fact. <ApiLink to="functions/economy-lab.proveEconomy" /> runs it in three steps.
 
 First, it walks every account and sums the balances `classify` marks `custodial`, filtered to `CREDIT` so a stray USD balance can't slip in. Then it converts that total to required USD at par, rounding down. Finally it reads the trust cash on hand and sets `shortfall` to `required − trust_cash` when the cash falls short, or zero otherwise. On a [sharded ledger](/economy/concepts/platform-sharding/), that trust-cash figure is the sum of every `trust_cash` shard row.
 
@@ -82,10 +84,10 @@ A `processor_orphan` is the dangerous direction. It's real money the processor m
 
 ## What relies on it
 
-[`requestPayout`](/economy/reference/operations/request-payout/) is the operation that turns credits back into dollars, so it depends on backing holding. A shortfall flagged by the treasury sweep is the signal to halt payouts until the gap is filled, before they drain a trust account that no longer covers what's owed.
+[`requestPayout`](/economy/reference/operations/request-payout/) is the operation that turns credits back into dollars, so it depends on backing holding. A shortfall flagged by the treasury sweep is the signal to halt payouts until the gap is filled. Halting first keeps payouts from draining a trust account that no longer covers what's owed.
 
 The fee sweep leans on the same surplus calculation to take only the platform's own money.
 
 The [storage engines](/economy/ports/storage/) carry the conservation, no-overdraft, and balance-integrity invariants in the database itself. The backing check is the independent audit layered over them: it re-derives solvency from the legs to catch a bug in the enforcement rather than trusting it.
 
-The next five concepts are the gates that keep a request from ever putting the books in a bad state: [actors and authorization](/economy/concepts/actors-and-authorization/), [idempotency](/economy/concepts/idempotency/), [the payout saga](/economy/concepts/payout-saga/), [subscriptions](/economy/concepts/subscriptions/), and [credit maturity](/economy/concepts/credit-maturity/).
+Five gates keep a request from ever putting the books in a bad state: [actors and authorization](/economy/concepts/actors-and-authorization/), [idempotency](/economy/concepts/idempotency/), [the payout saga](/economy/concepts/payout-saga/), [subscriptions](/economy/concepts/subscriptions/), and [credit maturity](/economy/concepts/credit-maturity/).

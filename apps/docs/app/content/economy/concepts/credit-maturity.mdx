@@ -6,9 +6,9 @@ order: 65
 status: stable
 sourceRefs:
   [
-    'src/maturity.ts#L219 · maturedBalance',
-    'src/maturity.ts#L253 · maturedAtLeast',
-    'src/maturity.ts#L44 · maturityHorizonMs',
+    'src/maturity.ts#L225 · maturedBalance',
+    'src/maturity.ts#L259 · maturedAtLeast',
+    'src/maturity.ts#L50 · maturityHorizonMs',
   ]
 related:
   [
@@ -18,11 +18,11 @@ related:
   ]
 ---
 
-Not every credit a user holds can be cashed out the instant it lands. The money behind a fresh credit can still be pulled back by a card chargeback or a disputed payment, so the platform makes new funds wait out a settlement window before they count as cleared. Credit maturity is how that wait is modeled and measured.
+Not every credit a user holds can be cashed out the instant it lands. The money behind a fresh credit can still be pulled back by a card chargeback or a disputed payment. So the platform makes new funds wait out a settlement window before they count as cleared. Credit maturity is how that wait is modeled and measured.
 
 ## The idea
 
-An account's balance isn't one undifferentiated number. It's a stack of dated **lots**: each top-up and each credit earned lands as a lot stamped with when it arrived. A lot **matures** once it has waited out its settlement window; until then it's still clearing.
+An account's balance isn't one undifferentiated number. It's a stack of dated **lots**: each top-up and each credit earned lands as a lot stamped with when it arrived. A lot **matures** once it has waited out its settlement window. Until then it is still clearing.
 
 The matured balance is the part of the live balance whose lots have cleared their wait. A cash-out can draw only that part.
 
@@ -34,18 +34,18 @@ The matured balance is the part of the live balance whose lots have cleared thei
 
 The maturity window holds new funds just long enough that, by the time they mature, the risk of a reversal has passed.
 
-The gate is visible at the call site. A seller whose raw <ApiLink to="functions/src.earned" /> balance covers a cash-out is still refused while that money is inside its window:
+The gate is visible at the call site. A seller whose raw <ApiLink to="functions/economy-lab.earned" /> balance covers a cash-out is still refused while that money is inside its window:
 
 ```ts
 import { requestPayout, userActor, toAmount } from '@pwngh/economy-lab';
 
-// the earned balance covers 8000, but today's sales are still clearing
+// the earned balance covers 24,000 credits, but today's sales are still clearing
 const outcome = await economy.submit(
   requestPayout({
     idempotencyKey: 'po_2201',
     actor: userActor('usr_s1'),
     userId: 'usr_s1',
-    amount: toAmount('CREDIT', 8000n),
+    amount: toAmount('CREDIT', 2_400_000n), // ≈ $120 at the payout rate
   }),
 );
 // → { status: "rejected", reason: "FUNDS_IMMATURE" } — same key retries cleanly once the window passes
@@ -57,9 +57,13 @@ Spends draw **oldest-first**: first in, first out. So once past spends have drai
 
 Maturity then splits the tail. A maturity horizon (now minus the settlement wait) falls somewhere along it. Lots older than the horizon have matured; the newest lots are still waiting. The matured balance is that cleared part of the tail.
 
-The horizon depends on how the funds arrived: `maturityHorizonMs` returns the wait per funding source, and an unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
+A partial spend does split a lot, but only in the arithmetic. When the drained amount stops partway through a lot, the tail keeps that lot's remainder with its original arrival time. No stored lot is rewritten; the split is re-derived on every read.
 
-The horizons split by environment: outside production every unset horizon is `0`, so a fresh dev economy clears funds instantly; in production the card horizon must be stated explicitly and every other rail defaults to it (see [the configuration reference](/economy/reference/configuration/#maturity-horizons)).
+A lot's clock starts when its posting lands in the account. Under the [accrual split](/economy/concepts/accrual-split/), a sale parks the seller's share in a settlement account first, and the drain later posts it to `earned`. So an earned lot's arrival time is the drain posting, and its settlement wait counts from then.
+
+The horizon depends on how the funds arrived. `maturityHorizonMs` returns the wait per funding source. An unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
+
+The horizons split by environment. Outside production every unset horizon is `0`, so a fresh dev economy clears funds instantly. In production the card horizon must be stated explicitly, and every other rail defaults to it (see [the configuration reference](/economy/reference/configuration/#maturity-horizons)).
 
 ## How it's measured
 
@@ -72,5 +76,5 @@ The computation is currency-agnostic: the same call covers a user's spendable cr
 ## What relies on it
 
 - [`spend`](/economy/reference/operations/spend/) gates on the matured-balance check for the buyer's spendable credits, so a spend can't draw funds still clearing.
-- [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a seller's earned balance, so a payout only ever draws cleared money.
+- [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a seller's earned balance — a payout only ever draws cleared money.
 - The configured [maturity horizons](/economy/reference/configuration/#maturity-horizons) set each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.

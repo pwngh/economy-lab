@@ -1,15 +1,15 @@
 ---
 title: 'Concurrency'
 summary: 'Two operations touching the same account at once stay correct through one app-side rule and one database constraint: every operation locks its accounts in one global order, and a unique index makes a forked hash chain impossible.'
-plain: "A “deadlock” is the classic trap where two operations each hold something the other needs and neither lets go, so both wait forever. Taking every lock in the same fixed order is the textbook way to make that trap impossible, and that ordering rule is what this page is about."
+plain: "A “deadlock” is the classic trap where two operations each hold something the other needs and neither lets go, so both wait forever. Taking every lock in the same fixed order is the textbook way to make that trap impossible."
 order: 90
 status: stable
 sourceRefs:
   [
     'src/ledger.ts#L84 · lockAll',
-    'src/economy.ts#L920 · lockAccounts',
-    'src/engines/postgres.ts#L258 · advanceChain',
-    'db/postgresql-schema.sql#L91 · chain_links_account_prev_uq',
+    'src/economy.ts#L1051 · lockAccounts',
+    'packages/postgres/src/postgres.ts · advanceChain',
+    'packages/postgres/db/postgresql-schema.sql#L91 · chain_links_account_prev_uq',
   ]
 related: ['economy/concepts/idempotency', 'economy/concepts/platform-sharding']
 ---
@@ -36,33 +36,33 @@ Acquire locks in an arbitrary order and you get deadlocks: one operation locks `
 
 <LockOrdering />
 
-The sort has to be identical everywhere it runs. `.sort()` compares by code unit, which is stable across machines and runtimes. A locale-aware comparison is not: it can order the same two ids differently in two places, which reintroduces the cycle. `lockAccounts` routes every operation through `lockAll` before its handler runs, so no handler can reimplement the ordering incorrectly.
+The sort has to be identical everywhere it runs. `.sort()` compares by code unit, which is stable across machines and runtimes. A locale-aware comparison is not: it can order the same two ids differently in two places, which reintroduces the cycle. `lockAccounts` routes every operation through `lockAll` before its handler runs — no handler can reimplement the ordering incorrectly.
 
 ## The no-fork constraint
 
 Locking serializes contending operations, but the forked chain they could still produce has to be blocked at the database. Each account's chain advances one link per posting, and a unique index on `(account_id, prev_hash)` prevents two postings from attaching at the same prior head.
 
-Under a race, the losing insert hits that unique index and the engine raises a conflict. economy-lab classifies the conflict as transient and retries the whole unit of work; the retry re-reads the account's new head and posts against it.
+Under a race, the losing insert hits that unique index and the engine raises a conflict. economy-lab classifies the conflict as transient and retries the whole unit of work. The retry re-reads the account's new head and posts against it. The retry budget is 10 attempts with a short jittered backoff between them, and an exhausted budget surfaces the conflict to the caller as an error. When retries spike or run out in production, the [deadlock-storm](/economy/ops/runbooks/deadlock-storm/) and [retry-exhaustion](/economy/ops/runbooks/retry-exhaustion/) runbooks cover the response.
 
 ## The hot-account ceiling
 
-Per-account locking has a built-in ceiling: an account can only commit as fast as its one lock turns over, and the platform's own accounts sit on the other side of every operation. [Platform sharding](/economy/concepts/platform-sharding/) is the pressure valve: each hot platform account can split into shard rows that concurrent postings spread across. Nothing on this page changes when it's on — a shard row takes its own lock and extends its own chain like any other account, which is exactly the point of the split.
+Per-account locking has a built-in ceiling. An account can only commit as fast as its one lock turns over, and the platform's own accounts sit on the other side of every operation. [Platform sharding](/economy/concepts/platform-sharding/) is the pressure valve. Each hot platform account can split into shard rows that concurrent postings spread across. Nothing on this page changes when it's on — a shard row takes its own lock and extends its own chain like any other account, which is exactly the point of the split.
 
 ## How the two layers divide the work
 
 - **The lock ordering** is the primary serialization. These writes run at the database's default isolation level rather than `SERIALIZABLE`, so preventing contending operations from interleaving falls to the ordering rather than the engine.
-- **The unique index** enforces chain continuity in the database, and it covers the window before an account has a balance row, when the application lock has nothing to acquire. The [conformance suite](/economy/concepts/the-proof/) runs same-account operations in parallel and checks that they conserve value and never overdraw.
+- **The unique index** enforces chain continuity in the database, and it covers the window before an account has a balance row, when the application lock has nothing to acquire. `test/conformance/concurrency.adversarial.test.ts` fires parallel spends on one under-funded wallet against a live SQL engine and checks that they conserve value and never overdraw.
 
 ## What relies on it
 
 - Every operation acquires its locks through `lockAccounts` before its handler runs, so this applies across the whole [submit surface](/economy/reference/the-economy/).
 - [Integrity](/economy/concepts/integrity/) depends on it: the per-account chain stays linear only because the lock order and the unique index stop two writers from extending the same head.
 
-Writes that survive the lock ordering and the no-fork index are still re-derived after the fact: [the prover](/economy/concepts/the-proof/) walks every account's chain and recomputes each hash. And all of this is contention on a single node — concurrency at scale is [out of scope](/economy/scope-and-non-goals/).
+Writes that survive the lock ordering and the no-fork index are still re-derived after the fact: [the prover](/economy/concepts/the-proof/) walks every account's chain and recomputes each hash. And all of this is contention inside a single database of record — [cluster nodes](/economy/concepts/cluster/) route sessions across processes, but cross-database partitioning of the ledger is [out of scope](/economy/scope-and-non-goals/).
 
 ## Try it
 
-Six racing spends against a wallet that only covers two — the funds gate commits what the balance covers and refuses the rest:
+Six racing spends run against a wallet that only covers two. The funds gate commits what the balance covers and refuses the rest:
 
 <Runnable name="drain" html={drainHtml} />
 

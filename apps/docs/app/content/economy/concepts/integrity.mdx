@@ -4,8 +4,13 @@ summary: 'Tamper-evidence: a per-account hash chain plus signed checkpoints make
 plain: "A “hash” is a short fingerprint of a piece of data: change even one character and the fingerprint comes out completely different. That single property is what this page is built on — it is how an altered record is made to give itself away."
 order: 70
 status: stable
-sourceRefs: ['src/chain.ts', 'src/integrity.ts', 'src/worker/checkpoint.ts']
-apiRefs: ['functions/src.allInvariantsHold']
+sourceRefs:
+  [
+    'src/chain.ts · advanceHeads',
+    'src/integrity.ts · proveEconomy',
+    'src/worker/checkpoint.ts · sealCheckpoint',
+  ]
+apiRefs: ['functions/economy-lab.allInvariantsHold']
 related:
   [
     'economy/concepts/actors-and-authorization',
@@ -24,7 +29,7 @@ Those two layers fail loudly in two different ways. Alter one old entry and its 
 
 ## Why it exists
 
-You can balance a tampered ledger. Conservation and no-overdraft (two of the [proof's](/economy/concepts/the-proof/) five flags) are properties of _sums_, not of the rows behind them.
+You can balance a tampered ledger. Conservation and no-overdraft (two of the [proof's](/economy/concepts/the-proof/) five flags) are checks over _sums_ — they say nothing about the individual rows behind them.
 
 Change two offsetting amounts, or move a credit from one account's history to another, and `conserved` stays true while the audit trail is now a lie. Integrity attests the rows are the ones actually posted, in the order they were posted.
 
@@ -32,15 +37,15 @@ An append-only audit trail is useful because you can replay it, which only holds
 
 ## The invariant
 
-For every account, walking its postings from genesis re-derives every stored hash, and each entry's recorded "previous head" equals the head reached so far. When that holds for every account, the Merkle root over all current heads equals the root in the latest signed checkpoint, and that checkpoint's signature verifies.
+For every account, walking its postings from genesis re-derives every stored hash. Each entry's recorded "previous head" equals the head reached so far. When that holds for every account, the Merkle root over all current heads equals the root in the latest signed checkpoint. That checkpoint's signature also verifies.
 
 <Callout type="note">
   Integrity is tamper-*evidence*, not tamper-*prevention*. The chain does not
-  stop a row from being edited; it guarantees the edit is found on the next
+  stop a row from being edited. It guarantees the edit is found on the next
   prove. A failed verification never self-heals. It is logged for an
-  [operator](/economy/concepts/actors-and-authorization/), because a mismatch
-  can also mean legitimate postings landed after the seal, and only a human can
-  tell that case from an attack.
+  [operator](/economy/concepts/actors-and-authorization/). A mismatch can also
+  mean legitimate postings landed after the seal, and only a human can tell
+  that case from an attack.
 </Callout>
 
 ## How it's enforced
@@ -53,15 +58,15 @@ The signed checkpoint catches a wholesale re-seal: rewriting history _and_ recom
 
 ### The per-account hash chain
 
-Each account carries its own chain. When a posting is appended, <SourceLink to="src/chain.ts#L93">advanceHeads</SourceLink> computes one new head per _distinct_ account the posting touches, hashing that account's legs and metadata onto its prior head (a posting that moves three accounts advances three chains by one link each). The result is a <SourceLink to="src/chain.ts#L37">ChainLink</SourceLink> that records the head before and after. An account's first posting starts from a genesis value of 64 zero hex characters.
+Each account carries its own chain. When a posting is appended, <SourceLink to="src/chain.ts#L96">advanceHeads</SourceLink> computes one new head per _distinct_ account the posting touches. It hashes that account's legs and metadata onto its prior head. A posting that moves three accounts advances three chains by one link each. The result is a <SourceLink to="src/chain.ts#L40">ChainLink</SourceLink> that records the head before and after. An account's first posting starts from a genesis value of 64 zero hex characters.
 
-<SourceLink to="src/chain.ts#L124">proveChain</SourceLink> re-checks every
+<SourceLink to="src/chain.ts#L127">proveChain</SourceLink> re-checks every
 chain. It sorts accounts by id char by char, so the same tampering is reported
 identically across runtimes and databases. Then it walks each account's postings
 from genesis, recomputes the head at each step with the same hash function the
 write path used, and stops at the first mismatch.
 
-The failure it returns is a <SourceLink to="src/chain.ts#L57">ChainBreak</SourceLink> that names the offending account and transaction, with a `reason` of one of two kinds:
+The failure it returns is a <SourceLink to="src/chain.ts#L57">ChainBreak</SourceLink> that names the offending account and transaction, with a `reason` of one of two kinds. It rides the report as `firstBreak`, so a verdict that says the chain did not replay also says where — the supervisor's integrity escalation carries the whole report, and that record is what a human reads after containment has already latched:
 
 | `reason`        | What it means                                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -70,15 +75,17 @@ The failure it returns is a <SourceLink to="src/chain.ts#L57">ChainBreak</Source
 
 ### The signed checkpoint
 
-On its own, the per-account chain can be defeated by an attacker who recomputes it, so the second layer anchors the whole ledger to a moment in time. The worker's `checkpoint` job calls <SourceLink to="src/worker/checkpoint.ts#L49">sealCheckpoint</SourceLink>, which folds every account's head into one <SourceLink to="src/chain.ts#L198">merkleRoot</SourceLink> and signs it.
+On its own, the per-account chain can be defeated by an attacker who recomputes it. The second layer anchors the whole ledger to a moment in time. The worker's `checkpoint` job calls <SourceLink to="src/worker/checkpoint.ts#L49">sealCheckpoint</SourceLink>, which folds every account's head into one <SourceLink to="src/chain.ts#L376">merkleRoot</SourceLink> and signs it.
 
 The Merkle construction is reproducible on any machine and changes if any head changes. It uses [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) domain tags (a `0x00` byte for leaves, `0x01` for internal nodes) so a leaf can never be reinterpreted as an interior node. It sorts leaves by account id, and hashes each pair left-then-right.
 
-Sealing proves before it signs. <SourceLink to="src/chain.ts#L288">recordCheckpoint</SourceLink> runs `proveChain` first; if the chain no longer re-derives, it throws a non-retryable `CHAIN_BROKEN` fault and persists no checkpoint. So a signed root never attests to a tampered ledger.
+Sealing proves before it signs. <SourceLink to="src/chain.ts#L468">recordCheckpoint</SourceLink> runs `proveChain` first. If the chain no longer re-derives, it throws a non-retryable `CHAIN.BROKEN` fault and persists no checkpoint.
+
+A seal on a store that carries the previous seal's authenticated leaves replays only what changed, and that is a real bound worth stating rather than rounding off. The previous signature covers each account's head and its leg sum together, so the seal re-proves every account whose head or sum has moved — including one with no traffic at all, whose sum can only have moved through an edit. What a seal alone does not see is an edit that moves neither: a change to a posting's metadata, or a pair of leg edits that cancel inside one account. Those are the rolling re-proof's, below, and they are caught within one rotation. A seal that replays from genesis, which is every seal on a store without authenticated seal heads, carries no such bound.
 
 The signature is [Ed25519](https://ed25519.cr.yp.to/), produced by the injected [`Signer`](/economy/ports/signer/). The key's public half is published, so an auditor holding only a saved checkpoint and that public key can recompute the root and verify the signature independently.
 
-A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpoint.ts#L137">reverifyCheckpoint</SourceLink> _before_ `checkpoint` each cycle. It re-derives the root over current heads via <SourceLink to="src/chain.ts#L347">verifyCheckpoint</SourceLink> and compares it to the latest signed checkpoint. A plain mismatch is recorded and logged at error level for an operator. Only a corrupt stored row or a storage outage throws and routes through the retry/dead-letter split.
+A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpoint.ts#L183">reverifyCheckpoint</SourceLink> _before_ `checkpoint` each cycle. It re-derives the root over current heads via <SourceLink to="src/chain.ts#L772">verifyCheckpoint</SourceLink> and compares it to the latest signed checkpoint. A plain mismatch is recorded and logged at error level for an operator. Only a corrupt stored row or a storage outage throws and routes through the retry/dead-letter split.
 
 <Callout type="warning">
   `verifyCheckpoint` also fails when the live head count drops below the count
@@ -90,17 +97,12 @@ A second worker job, `checkpointVerify`, runs <SourceLink to="src/worker/checkpo
 
 ### The rolling re-proof
 
-Seals and verified reads cover the history a handler touches; the `reproof` sweep covers everything else. Each run re-derives a bounded page of stored chain links from their own content and advances a persistent cursor, wrapping around forever — so a cold account's old rows, metadata included, get re-hashed on an explicit cadence instead of never. That cadence bounds how long an in-place edit of old rows can sit unnoticed: `rotatedAt`, the moment the last complete pass finished, is the verified-through watermark, and `economy.capacity()` reports its age. A link that no longer re-derives throws a non-retryable `CHAIN.BROKEN` and leaves the cursor in place, so every later tick re-reports the same break until an operator intervenes.
+Seals and verified reads cover the history a handler touches. The `reproof` sweep covers everything else. Each run re-derives a bounded page of stored chain links from their own content, advances a persistent cursor, and wraps around forever. So a cold account's old rows, metadata included, get re-hashed on an explicit cadence instead of never. That cadence bounds how long an in-place edit of old rows can sit unnoticed. `rotatedAt`, the moment the last complete pass finished, is the verified-through watermark, and `economy.capacity()` reports its age. A link that no longer re-derives throws a non-retryable `CHAIN.BROKEN` and leaves the cursor in place. Every later tick then re-reports the same break until an operator intervenes.
 
-The same construction is what lets proved history leave hot storage: the archive sweep re-verifies a sealed prefix, signs per-account archive heads under a Merkle sum-root, and only then moves and deletes. [Archival](/economy/ops/archival/) owns that boundary.
+The sweep checks that the page's links still chain, not only that each one re-derives, because those are different failures. Editing a link breaks its own hash. Deleting one breaks nothing about the links either side of it — both still re-derive perfectly from their own content — and shows up only as a child naming a predecessor that is no longer there. Links arrive in commit order, so consecutive links of one account are compared for free; the link a page opens on has its predecessor in an earlier page, and the sweep resolves that one against the store. A predecessor the store no longer holds is a deletion, unless it is the archive head a signed boundary cut the chain at, which the sweep checks before it calls it a break.
+
+The same construction lets proved history leave hot storage. The archive sweep re-verifies a sealed prefix, signs per-account archive heads under a Merkle sum-root, and only then moves and deletes. [Archival](/economy/ops/archival/) owns that boundary.
 
 ## Two provers
 
-Two provers re-check the chain, and [the proof](/economy/concepts/the-proof/) covers how the light `read.health()` and the thorough `make prove` replay divide the work. Of the proof's five flags, integrity supplies `chainIntact`; <SourceLink to="src/integrity.ts#L280">allInvariantsHold</SourceLink> rolls all five into a single boolean.
-
-The light prover is one read away at any moment:
-
-```ts
-const report = await economy.read.health();
-// → { conserved: true, backed: true, noOverdraft: true, chainIntact: true, consistent: true }
-```
+Two provers re-check the chain: the light in-process `read.health()` and the thorough `proveEconomy` replay. How they divide the work, and the one flag they differ on, is [the proof](/economy/concepts/the-proof/)'s story. Of the proof's five flags, integrity supplies `chainIntact`. <SourceLink to="src/integrity.ts#L366">allInvariantsHold</SourceLink> rolls all five into a single boolean.

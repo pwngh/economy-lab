@@ -1,16 +1,16 @@
 ---
 title: 'Configuration'
-summary: 'Every environment variable economy-lab reads, with its meaning and default.'
+summary: 'The environment variables a deployment sets, with the meaning and default of each. The Tilia rail credentials and the bench harness dials are documented where they are parsed.'
 order: 40
 status: stable
 sourceRefs:
   [
-    'src/config.ts#L303-L318 · loadConfig',
-    'src/index.ts#L656 · openPorts',
-    'src/from-env.ts#L145 · resolveExternals',
+    'src/config.ts#L440-L449 · loadConfig',
+    'src/index.ts#L814 · openPorts',
+    'src/from-env.ts#L166 · resolveExternals',
     '.env.example',
   ]
-apiRefs: ['interfaces/src.Config']
+apiRefs: ['interfaces/economy-lab.Config']
 related:
   [
     'economy/ports/rates',
@@ -22,25 +22,38 @@ related:
 
 ## How configuration is read
 
-economy-lab reads the environment once, at startup: the edge calls <ApiLink to="functions/src.loadConfig" />, gets a
+economy-lab reads the environment once, at startup. The edge calls <ApiLink to="functions/economy-lab.loadConfig" />, gets a
 plain [`Config`](https://github.com/pwngh/economy-lab/blob/main/src/config.ts) object, and
-passes it in — the library modules never touch `process.env`. A misconfigured deploy fails
+passes it in. The library modules never touch `process.env`. As a result, a misconfigured deploy fails
 at startup, not deep inside a request.
 
-That single read also means defaults live in one file. Every tunable below is parsed by
-`loadConfig` with a fallback, so an unset or malformed value lands on the documented default
-rather than leaving the config half-applied. These are the same defaults the operation and
-[background-worker](/economy/reference/background-worker/) pages cite.
+That single read also keeps every default in one file. `loadConfig` parses every tunable below
+with a fallback. An unset or malformed value lands on the documented default
+rather than leaving the config half-applied. The operation pages and the
+[background-worker](/economy/reference/background-worker/) page cite these same defaults.
 
-A `config` override passed to <ApiLink to="functions/src.openPorts" /> (or <ApiLink to="functions/src.defaultConfig" />) applies last-wins per knob,
-except the record-valued knobs — `maturityHorizonMs` and `payoutSla` — which merge one level
-deep: overriding one funding source or one SLA step keeps the others rather than replacing the
+A `config` override passed to <ApiLink to="functions/economy-lab.openPorts" /> (or <ApiLink to="functions/economy-lab.defaultConfig" />) applies last-wins per knob.
+The two record-valued knobs, `maturityHorizonMs` and `payoutSla`, are the exception: they merge one level
+deep. Overriding one funding source or one SLA (service-level agreement) step keeps the others rather than replacing the
 whole record.
 
-A handful of variables (the signing secrets, the CREDIT-to-USD rates, the payout provider, and
-the infrastructure URLs) are read _outside_ `loadConfig`, when the edge wires up the
-[`Economy`](/economy/reference/the-economy/) and its ports. Those are grouped separately at
-the end, because they pick adapters rather than tune policy.
+An override is held to the same bounds as the variable, and the two paths part on what they do
+with a value outside them. `PLATFORM_FEE_BPS=99999` lands on the `1530` default, because a typo in
+a deploy file should not crash-loop a process. `config: { platformFeeBps: 99999 }` is refused with
+`CONFIG.INVALID` naming the knob and the range it admits: a knob written in code has no fallback
+that is not a fee somebody did not choose. Both readings are in `preflight`, so the refusal shows
+up at deploy time and not on the first sale — the refusal as an error, and any variable the reader
+discarded for its default as a warning.
+
+The same bounds hold on a config that was never built here at all. `Ports.config` is a plain field,
+so a hand-built structural bag can carry any number; every door that takes one checks it on the way
+in — <ApiLink to="functions/economy-lab.createEconomy" />, the worker's entry points, and the
+instance lane — and answers the same `CONFIG.INVALID`.
+
+The edge reads a handful of variables _outside_ `loadConfig`, when it wires up the
+[`Economy`](/economy/reference/the-economy/) and its ports. These are the signing secrets, the
+CREDIT-to-USD rates, the payout provider, and the infrastructure URLs. They pick adapters
+rather than tune policy, and they are grouped separately at the end.
 
 <Callout type="note">
   `.env.example` ships variable names and commented example values only, never
@@ -50,43 +63,56 @@ the end, because they pick adapters rather than tune policy.
 
 ## Required secrets
 
-Two secrets have no honest default. In production (`NODE_ENV=production`) a blank value for
-either makes `loadSecrets` throw a single `CONFIG.INVALID` fault listing every missing key at
-once.
+Two secrets have no honest default. In production (`NODE_ENV=production`), a blank value for
+either one makes `loadSecrets` throw a single `CONFIG.INVALID` fault. The fault lists every
+missing key at once.
 
 | Variable         | Meaning                                                                                                                  | Default                       |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `WEBHOOK_SECRET` | HMAC key that verifies inbound billing and settlement webhooks (e.g. from a payment processor).                          | none (required in production) |
+| `WEBHOOK_SECRET` | HMAC (keyed-hash message authentication code) key that verifies inbound billing and settlement webhooks (e.g. from a payment processor).                          | none (required in production) |
 | `SIGNING_SECRET` | Key the signer uses to sign chain checkpoints and entitlement-gated URLs. See [integrity](/economy/concepts/integrity/). | none (required in production) |
 
+A rotation adds a third name. `SIGNING_SECRETS_PRIOR` is the comma-separated tail of rotated-out
+signing secrets: a checkpoint sealed under a listed secret still verifies, while new seals sign
+under `SIGNING_SECRET`. Moving the old secret here is what makes a rotation non-destructive, and
+[key rotation](/economy/ops/key-rotation/) walks the sequence.
+
+| Variable                | Meaning                                                                  | Default          |
+| ----------------------- | ------------------------------------------------------------------------ | ---------------- |
+| `SIGNING_SECRETS_PRIOR` | Rotated-out signing secrets, comma-separated. Verification only.          | unset (no prior keys) |
+
 <Callout type="warning">
-  The serve and worker entry point (`scripts/main.ts`) refuses to start if
-  either secret is blank, in *any* `NODE_ENV`, a stricter check than
-  `loadSecrets`'s production-only one.
+  `economy serve` runs preflight before it binds and refuses on a blank
+  secret. `economy dev` supplies a stand-in signing key instead, so a local
+  run needs neither set.
 </Callout>
 
 ## Payouts
 
-These tune when a payout is too small, too frequent, or too old to proceed. The minimums are
-counted in CREDIT minor units; see the [money model](/economy/concepts/money-model/) for what
-a minor unit is.
+These variables decide when a payout is too small, too frequent, or too old to proceed. The
+minimums are counted in CREDIT minor units. The [money model](/economy/concepts/money-model/)
+page explains what a minor unit is.
 
 | Variable                  | Meaning                                                                                                                                                                                | Default            |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against _earned_ CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100) |
-| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The 24h default matches the public payout docs of the platform the example models; that platform's payout terms require 14 days, so a production deploy sets `1209600000`. | `86400000` (24h)   |
+| `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against _earned_ CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100 at the payout rate) |
+| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The platform the example models requires 14 days between payouts, so a production deploy sets `1209600000`. The 24h default keeps a dev loop from waiting two weeks. | `86400000` (24h)   |
 | `MAX_PAYOUT_ATTEMPTS`     | Provider attempts for one payout before the system gives up and reverses it.                                                                                                           | `5`                |
 | `MAX_PAYOUT_AGE_MS`       | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back. The default outlasts a rail's one-to-two business-day settlement. | `259200000` (3d)   |
 | `PAYOUT_FEE_BPS`          | Payout-rail fee in basis points, charged on the USD a seller cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue.                            | `150` (≈ 1.5%)     |
 
-The `payout` rate and the per-state payout SLAs also feed the saga; the SLAs live under the
-worker group below, and the rate under [externals](#production-externals).
+The `payout` rate and the per-state payout SLAs also feed the saga. The SLAs live under the
+worker group below. The rate lives under [externals](#production-externals).
 
 ## Worker queues
 
 The [background worker](/economy/reference/background-worker/) retries deferred work, then
-gives up after a cap so a poison message can't wedge a queue. Each cap below is a number of
-attempts; the worker dead-letters once `attempts` reaches it.
+gives up after a cap. The cap keeps a poison message from wedging a queue. Each cap below is a
+number of attempts. The worker dead-letters an item once its `attempts` reaches the cap.
+
+An attempt is counted when it starts, not when it fails, so an attempt that takes the worker down
+with it — a hang, a crash, an out-of-memory kill — costs the item one of its attempts just as a
+plain failure does. That is what bounds a poison message that never lets its worker finish.
 
 | Variable                    | Meaning                                                                                                                                  | Default |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------- |
@@ -94,8 +120,8 @@ attempts; the worker dead-letters once `attempts` reaches it.
 | `MAX_INBOX_ATTEMPTS`        | Apply attempts an inbox event gets before the apply worker dead-letters it (status `dead`). The inbound mirror of `MAX_OUTBOX_ATTEMPTS`. | `10`    |
 | `MAX_SUBSCRIPTION_ATTEMPTS` | Consecutive retryable renewal failures before the renewal sweep lapses a subscription instead of re-billing forever.                     | `10`    |
 
-The payout SLAs are per-state staleness thresholds the reconcile sweep folds over. A step
-stuck past its threshold is overdue. `DEFAULT` covers any state not named.
+The payout SLAs are per-state staleness thresholds. The reconcile sweep folds over them. A
+step stuck past its threshold is overdue. `DEFAULT` covers any state not named.
 
 | Variable           | Meaning                                                                                                                              | Default  |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | -------- |
@@ -105,14 +131,14 @@ stuck past its threshold is overdue. `DEFAULT` covers any state not named.
 
 ## Maturity horizons
 
-Topped-up funds wait before they can be spent or paid out, keyed by funding source. An
-unlisted source falls back to the `default` entry. See [credit
+Topped-up funds wait before they can be spent or paid out. The wait is keyed by funding
+source. An unlisted source falls back to the `default` entry. See [credit
 maturity](/economy/concepts/credit-maturity/) for why the holding period exists.
 
-The horizons split by environment. Outside production every unset horizon is `0` — funds clear
-instantly, so the zero-config quickstart's top-up can be spent in the next line. In production
-`MATURITY_HORIZON_CARD_MS` is required (startup fails fast naming it, like the secrets): a real
-deployment states its chargeback window rather than inheriting a silent policy number.
+The horizons split by environment. Outside production, every unset horizon is `0`. Funds clear
+instantly, so the zero-config quickstart's top-up can be spent in the next line. In production,
+`MATURITY_HORIZON_CARD_MS` is required. Startup fails fast and names it, like the secrets. A
+real deployment states its chargeback window rather than inheriting a silent policy number.
 
 | Variable                      | Meaning                                                                                                | Default             |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------- |
@@ -124,29 +150,31 @@ deployment states its chargeback window rather than inheriting a silent policy n
 
 ## Fees and the risk gate
 
-`PLATFORM_FEE_BPS` is the platform's cut on a sale, in basis points, where `10000` is 100%.
-The velocity variables bound how fast one subject may spend before the risk check steps in;
-see [risk and velocity](/economy/concepts/actors-and-authorization/) for the actor side of
+`PLATFORM_FEE_BPS` sets the platform's cut on a sale, in basis points, where `10000` is 100%.
+The velocity variables bound how fast one subject may spend before the risk check steps in.
+See [risk and velocity](/economy/concepts/actors-and-authorization/) for the actor side of
 that gate.
 
 The velocity ceiling splits by environment the same way the maturity anchor does. Outside
-production the default is 1,000 credits per window — sized so the velocity examples can trip
-the gate. In production `VELOCITY_LIMIT_MINOR` is required (startup fails fast naming it, like
-the secrets): a per-user hourly ceiling is a risk decision each deployment states for itself.
+production, the default is 1,000 credits per window. That size lets the velocity examples trip
+the gate. In production, `VELOCITY_LIMIT_MINOR` is required, and startup fails fast naming it,
+the same way it names the secrets. A per-user hourly ceiling is a risk decision each deployment states for
+itself.
 
 | Variable                        | Meaning                                                                                                                  | Default        |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | `PLATFORM_FEE_BPS`              | Platform's transaction fee in basis points. The example models a ~15.3% marketplace fee.                                 | `1530`         |
 | `VELOCITY_LIMIT_MINOR`          | The single-knob ceiling per window, in CREDIT minor units; both window classes fall back to it.                          | dev `100000` / prod req. |
-| `VELOCITY_INFLOW_LIMIT_MINOR`   | Ceiling for the inflow window (<ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.grantPromo" />) — the card-testing gate.                                           | `= limit`      |
-| `VELOCITY_OUTFLOW_LIMIT_MINOR`  | Ceiling for the outflow window (<ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" />) — the drained-wallet gate.                        | `= limit`      |
+| `VELOCITY_INFLOW_LIMIT_MINOR`   | Ceiling for the inflow window (<ApiLink to="variables/economy-lab.topUp" />, <ApiLink to="variables/economy-lab.grantPromo" />) — the card-testing gate.                                           | `= limit`      |
+| `VELOCITY_OUTFLOW_LIMIT_MINOR`  | Ceiling for the outflow window (<ApiLink to="variables/economy-lab.spend" />, <ApiLink to="variables/economy-lab.subscribe" />, <ApiLink to="variables/economy-lab.requestPayout" />) — the drained-wallet gate.                        | `= limit`      |
 | `VELOCITY_WINDOW_MS`            | Length of the rolling window. Only a subject's attempts inside the last window count; each ages out once older.          | `3600000` (1h) |
 
 ## Subscriptions
 
-The price band bounds what a subscription may charge per period, so a typo'd price cannot
-silently bind a buyer to it. A price outside the band is refused at
-[subscribe](/economy/reference/operations/subscribe/) time as a wiring error.
+The price band bounds what a subscription may charge per period. The band keeps a typo'd
+price from silently binding a buyer to it. The
+[subscribe](/economy/reference/operations/subscribe/) operation refuses a price outside the
+band as a wiring error.
 
 | Variable                       | Meaning                                              | Default                  |
 | ------------------------------ | ---------------------------------------------------- | ------------------------ |
@@ -155,63 +183,88 @@ silently bind a buyer to it. A price outside the band is refused at
 
 ## The purchase catalog
 
-Unset, [top-up](/economy/reference/operations/top-up/) accepts any positive CREDIT amount. Set, `TOP_UP_BUNDLES_MINOR` names the only amounts a top-up may carry — the platform's purchase bundles — and any other amount faults `OP.MALFORMED`, since a store client that offers an off-catalog amount is miswired.
+When `TOP_UP_BUNDLES_MINOR` is unset, [top-up](/economy/reference/operations/top-up/) accepts any positive CREDIT amount. When it is set, it names the only amounts a top-up may carry: the platform's purchase bundles. Any other amount faults `OP.MALFORMED`, because a store client that offers an off-catalog amount is miswired.
 
 | Variable               | Meaning                                                                                                        | Default          |
 | ---------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------- |
 | `TOP_UP_BUNDLES_MINOR` | Comma-separated catalog of permitted top-up amounts, in CREDIT minor units (e.g. `60000,120000,240000`). | unset (any amount) |
 
+### A worked storefront
+
+The catalog, the rates, and the payout floor are one pricing decision. The block below states it end to end. The bundles are 600, 1,200, and 2,400 credits. At the buy rate of roughly 120 credits per dollar, those bundles sell for about $5, $10, and $20. Earned credits cash out at the payout rate of $0.005 per credit, so the 20,000-credit payout floor is $100 at that rate — not at the buy rate, which would misprice it:
+
+```bash
+# The purchase catalog: 600 / 1,200 / 2,400 credits, in minor units.
+TOP_UP_BUNDLES_MINOR=60000,120000,240000
+
+# The buy rate: 8333 / 10^6 ≈ $0.00833 per credit, about 120 credits per dollar.
+CREDIT_BUY_RATE=8333
+CREDIT_BUY_SCALE=6
+
+# Backing and cash-out: 5 / 10^3 = $0.005 per credit. The buy-vs-par gap is the spread.
+CREDIT_PAR_RATE=5
+CREDIT_PAR_SCALE=3
+PAYOUT_RATE=5
+PAYOUT_SCALE=3
+
+# The payout floor: 20,000 earned credits, $100 at the payout rate.
+PAYOUT_MIN_EARNED_MINOR=2000000
+```
+
 ## Platform sharding
 
-A hot platform account (`REVENUE`, `STORED_VALUE`, `TRUST_CASH`, ...) is one row, and concurrent postings of the same kind queue on its lock. `PLATFORM_SHARDS` splits each one across several rows so those postings spread out; [platform sharding](/economy/concepts/platform-sharding/) covers which accounts shard and how a posting picks its row.
+A hot platform account (`REVENUE`, `STORED_VALUE`, `TRUST_CASH`, ...) is one row. Concurrent postings of the same kind queue on its lock. `PLATFORM_SHARDS` splits each account across several rows so those postings spread out. The [platform sharding](/economy/concepts/platform-sharding/) page covers which accounts shard and how a posting picks its row.
 
 | Variable          | Meaning                                                                                | Default |
 | ----------------- | -------------------------------------------------------------------------------------- | ------- |
 | `PLATFORM_SHARDS` | How many rows each hot platform account is split across. `1` is the unsharded ledger. | `1`     |
 
-Raising the count on a live ledger is safe: shard 0 keeps the bare account id, so existing balances already sit on shard 0 and new postings fan out from there. Lowering it is the careful direction. A smaller count reroutes every key, so rows that still hold balance can drop out of the rotation. Readers keep summing them and totals stay right, but nothing ever posts to them again, so drain before dropping the count back to `1`.
+Raising the count on a live ledger is safe. Shard 0 keeps the bare account id, so existing balances already sit on shard 0 and new postings fan out from there. Lowering it is the careful direction. A smaller count reroutes every key, so rows that still hold balance can drop out of the rotation. Readers keep summing those rows and totals stay right. But nothing ever posts to them again, so drain them before dropping the count back to `1`.
 
 ## The accrual split
 
-Sharding relieves the platform accounts; a hot _seller's_ `earned` row needs [the accrual split](/economy/concepts/accrual-split/). With the flag on, spend and subscribe park seller shares on a `SETTLEMENT_ACCRUAL` shard and the worker's drain sweep moves them to `earned` in batches. Meant to run with `PLATFORM_SHARDS` at `2` or more, so the parking shards don't queue like the row they replace.
+Sharding relieves the platform accounts. A hot _seller's_ `earned` row needs [the accrual split](/economy/concepts/accrual-split/). With the flag on, spend and subscribe park seller shares on a `SETTLEMENT_ACCRUAL` shard. The worker's drain sweep then moves them to `earned` in batches. Run the split with `PLATFORM_SHARDS` at `2` or more, so the parking shards do not queue like the row they replace.
 
 | Variable        | Meaning                                                                                     | Default   |
 | --------------- | -------------------------------------------------------------------------------------------- | --------- |
 | `ACCRUAL_DRAIN` | `1` turns the split on; seller balances then move when the `accrualDrain` sweep runs.       | off       |
 
-## Replay window and the maintenance pause
+## Webhook freshness and the maintenance pause
 
-`REPLAY_WINDOW_MS` bounds how stale a signed request may be before it's rejected as a possible
-replay; see [integrity](/economy/concepts/integrity/). The two pause bounds open an optional
-maintenance window.
+`FRESHNESS_WINDOW_MS` bounds how far an inbound webhook's `x-timestamp` may sit from the server's
+clock. It is a bound on clock skew, not on replay: the provider's signature does not cover that
+header, so a delivery re-dated inside the window verifies again. Replay is refused by the event-id
+claim described in [the HTTP service](/economy/reference/http-service/). See
+[integrity](/economy/concepts/integrity/). The two pause bounds open an optional maintenance window.
 
 | Variable                 | Meaning                                                                              | Default          |
 | ------------------------ | ------------------------------------------------------------------------------------ | ---------------- |
-| `REPLAY_WINDOW_MS`       | How long a signed webhook timestamp stays valid. Older ones are rejected.            | `300000` (5 min) |
+| `FRESHNESS_WINDOW_MS`    | How far an inbound webhook's timestamp may sit from the server clock.                | `300000` (5 min) |
 | `ECONOMY_PAUSE_START_MS` | Epoch ms the window opens (inclusive).                                               | unset (no pause) |
 | `ECONOMY_PAUSE_END_MS`   | Epoch ms the window closes (exclusive). This is the `resumesAt` the decline reports. | unset (no pause) |
 
 The pause is active only when _both_ bounds parse as integers and `start <= now < end`. While
-it holds, end-user discretionary writes are declined with `ECONOMY_PAUSED`; settlement (actor
-`system`) and operator fixes still flow, and reads never reach the gate.
+it holds, the gate declines end-user discretionary writes with `ECONOMY_PAUSED`. Settlement
+(actor `system`) and operator fixes still flow. Reads never reach the gate.
 
 <Callout type="note">
-  Either bound left unset or non-integer leaves that bound `null`, which reads
-  as "no window configured", distinct from a real epoch value of zero. So a
+  A bound left unset or non-integer stays `null`. A `null` bound reads as "no
+  window configured", which is distinct from a real epoch value of zero. So a
   half-set pause never half-activates.
 </Callout>
 
 ## Production externals
 
-These choose which adapter fills each port, so the edge reads them at wiring time rather than
-through `loadConfig`. In production, `openPorts` fails fast with one preflight message naming
-every rate or provider URL that is missing or malformed, so a prod process never runs
-on the 1:1 dev rate or an auto-approve payout stub. Outside production these fall back to dev
-stubs, and a local run needs none of them.
+These variables choose which adapter fills each port. The edge therefore reads them at wiring
+time rather than through `loadConfig`. In production, `openPorts` fails fast with one preflight
+message. The message names every rate or provider URL that is missing or malformed. As a
+result, a prod process never runs on the 1:1 dev rate or an auto-approve payout stub. Outside
+production, these fall back to dev stubs, and a local run needs none of them.
 
 The six rate variables configure the fixed-point CREDIT-to-USD conversions for the
-[rates port](/economy/ports/rates/): `usd_minor = floor(credit_minor × rate / 10^scale)`. The
-gap between `buy` and `par` is the platform [spread](/economy/concepts/money-model/).
+[rates port](/economy/ports/rates/). The formula is
+`usd_minor = floor(credit_minor × rate / 10^scale)`. The gap between `buy` and `par` is the
+platform [spread](/economy/concepts/money-model/).
 
 | Variable                               | Meaning                                                                                                               | Default                       |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
@@ -223,23 +276,25 @@ gap between `buy` and `par` is the platform [spread](/economy/concepts/money-mod
 
 ## Infrastructure adapters
 
-`DATABASE_URL` picks the storage backend, and the cache and dispatcher URLs pick their
-transports. Each is optional: unset means the dependency-free in-memory adapter. These belong
-to [storage](/economy/ports/storage/), read by
-`openPorts` in `src/index.ts`.
+`DATABASE_URL` picks the storage backend. The cache and dispatcher URLs pick their
+transports. Each is optional. An unset variable means the dependency-free in-memory adapter.
+These belong to [storage](/economy/ports/storage/), and `openPorts` in `src/index.ts` reads
+them.
 
 | Variable         | Meaning                                                                                 | Default                     |
 | ---------------- | --------------------------------------------------------------------------------------- | --------------------------- |
 | `DATABASE_URL`   | A `postgres://` or `mysql://` connection string selects that engine; any other scheme throws.         | unset (in-memory store)     |
-| `DB_POOL_MAX`    | Max connections in the SQL engine's pool. Excess concurrent submits queue for a connection, and a transaction holds exactly one for its whole life, so the queue always drains. | unset (driver default `10`) |
+| `DB_POOL_MAX`    | Max connections in the SQL engine's pool. Excess concurrent submits queue for a connection. A transaction holds exactly one connection for its whole life, so the queue always drains. | unset (driver default `10`) |
+| `DB_CONNECT_TIMEOUT_MS` | How long the SQL engine waits for a connection before it fails. It also bounds the wait for a free pool connection, so set it above the slowest transaction, never below. `0` is refused, because both drivers read it as "no timeout" — the hang this knob exists to bound. | unset (engine default 10s) |
 | `REDIS_URL`      | Adds a Redis read-through cache the store consults before the database.                 | unset (no cache)            |
 | `SQS_QUEUE_URL`  | Delivers outgoing events via an Amazon SQS queue. Wins if `DISPATCHER_URL` is also set. | unset                       |
 | `DISPATCHER_URL` | Posts outgoing events over HTTP to your event bus.                                      | unset (in-process delivery) |
 
-Three of the optional ports — the dispatcher, the payee directory, and the checkpoint anchor —
-production refuses to lose silently: leaving one unwired without a word is a preflight error.
-Each has a decline flag (`1` or `true`) that declares the deployment runs without that port on
-purpose.
+Production refuses to lose three of the optional ports silently: the dispatcher, the payee
+directory, and the checkpoint anchor. Leaving one of them unwired without a word is a
+preflight error. Each has a decline flag (`1` or `true`) that declares the deployment runs
+without that port on purpose. The flag beats a port supplied through the init, on all three
+slots, and `preflight` warns when a declined slot is also configured.
 
 | Variable              | Meaning                                                                                  | Default |
 | --------------------- | ---------------------------------------------------------------------------------------- | ------- |
@@ -262,12 +317,34 @@ cadence and batch size.
 
 ## The package bridges
 
-Two optional bridges in the host entry point (`scripts/main.ts`) compose the sibling packages in.
-Each is off until its gate variable is set, and neither is read by the library itself; the seams
-they wire are owned by [the packages](/economy/ports/packages/).
+Two optional bridges compose the sibling packages in. This repository's own module reads them
+at `economy/lib/host.ts` and hands the result to `createApp` as ordinary port overrides. Each
+bridge is off until a gate variable is set, and the library itself reads none of them.
+[The packages](/economy/ports/packages/) page owns the seams the bridges wire.
+
+The taskq bridge has two gates rather than one. `TASKQ=1` puts the task table in the ledger's own
+database, which is what lets an enqueue share the ledger's transaction. `TASKQ_DATABASE_URL` is the
+split-deployment override: it opts in on its own, and its scheme picks the engine.
 
 | Variable             | Meaning                                                                                                                                                                    | Default            |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| `TASKQ_DATABASE_URL` | Enables the @pwngh/taskq bridge: outbox events are enqueued as durable tasks on this Postgres database. The optional `@pwngh/taskq` package must be installed; `TASKQ_POLL_MS` tunes the poll (default `250`). | unset (bridge off) |
-| `TILIA_CLIENT_ID`    | Enables the economy-edge Tilia bridge: the shimmed processor, the payee directory, the float feed, and the webhook handler. `TILIA_ENVIRONMENT` picks `staging` or `production`; production also requires `TILIA_PAYEE_DATABASE_URL` and `TILIA_WEBHOOK_SECRET`. | unset (bridge off) |
+| `TASKQ`              | `1` enqueues outbox events as durable `@pwngh/taskq` tasks beside the ledger. It needs a `postgres://` or `mysql://` `DATABASE_URL` to sit next to, and throws at startup without one. | unset (bridge off) |
+| `TASKQ_DATABASE_URL` | A `postgres://` or `mysql://` DSN putting the task table on its own database. Any other scheme throws. Implies `TASKQ=1`. | unset (follows `TASKQ`) |
+| `TASKQ_POLL_MS`      | Gap between the taskq worker's polls.                                                                                                                                      | `250`              |
+| `TILIA_CLIENT_ID`    | Enables the economy-edge Tilia bridge, which wires the shimmed processor, the payee directory, the float feed, and the webhook handler. `TILIA_ENVIRONMENT` picks `staging` or `production`. Production also requires `TILIA_PAYEE_DATABASE_URL` and `TILIA_WEBHOOK_SECRET`. | unset (bridge off) |
+
+Either taskq gate needs the optional `@pwngh/taskq` peer dependency installed, and the Tilia gate
+needs `@pwngh/economy-edge`. Neither package is a dependency of the lab.
+
+## The supervisor opt-in
+
+`SUPERVISOR=1` compiles to the module's `flags.supervisor`, which wraps the composition's meter and
+logger in the `@pwngh/economy-lab/supervisor` signal buffer and ticks a supervisor on
+`WORKER_INTERVAL_MS`. Leaving it unset composes no supervisor at all — that is the off switch.
+[The supervisor](/economy/ops/the-supervisor/) owns what it then watches and what it is allowed to
+do about it.
+
+| Variable     | Meaning                                                     | Default              |
+| ------------ | ----------------------------------------------------------- | -------------------- |
+| `SUPERVISOR` | `1` composes the in-process supervisor beside the worker.   | unset (no supervisor) |
 

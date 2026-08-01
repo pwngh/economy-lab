@@ -6,3 +6,24 @@
 /economy/concepts/lifecycles/ /economy/concepts/payout-saga/ 301
 /economy/ports/storage-and-messaging /economy/ports/storage/ 301
 /economy/ports/storage-and-messaging/ /economy/ports/storage/ 301
+
+# The /api modules were renamed from file-path tokens to import-path names; symbol pages are
+# too many to redirect and had no known inbound links at the rename.
+/api/modules/src.html /api/modules/economy-lab.html 301
+/api/modules/src_ports.html /api/modules/ports.html 301
+/api/modules/src_adapters.html /api/modules/adapters.html 301
+/api/modules/src_adapters_redis.html /api/modules/adapters_redis.html 301
+/api/modules/src_adapters_sqs.html /api/modules/adapters_sqs.html 301
+/api/modules/src_engines_postgres.html /api/modules/engines_postgres.html 301
+/api/modules/src_engines_mysql.html /api/modules/engines_mysql.html 301
+/api/modules/src_engines_mysql-mariadb.html /api/modules/engines_mysql-mariadb.html 301
+/api/modules/src_worker.html /api/modules/worker.html 301
+/api/modules/src_server.html /api/modules/server.html 301
+/api/modules/src_netting.html /api/modules/netting.html 301
+/api/modules/src_ops.html /api/modules/supervisor.html 301
+/api/modules/src_store-kit.html /api/modules/store-kit.html 301
+/api/modules/test_conformance.html /api/modules/testing.html 301
+
+# `./ops` became `./supervisor` in 0.8.0, so the module page moved with it. The 0.7.0 hop above
+# is repointed at the same target rather than chained through a second redirect.
+/api/modules/ops.html /api/modules/supervisor.html 301

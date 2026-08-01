@@ -11,11 +11,11 @@ notes:
     href: 'https://patents.google.com/patent/US3886525'
 sourceRefs:
   [
-    'src/ports.ts#L1481-L1487 · SAGA_STATES',
-    'src/operations/requestPayout.ts',
-    'src/worker/payouts.ts',
+    'src/ports.ts#L1729-L1735 · SAGA_STATES',
+    'src/operations/requestPayout.ts · requestPayout',
+    'src/worker/payouts.ts · advanceDuePayouts',
   ]
-apiRefs: ['interfaces/src_ports.Processor']
+apiRefs: ['interfaces/ports.Processor']
 related:
   [
     'economy/reference/operations/reverse-payout',
@@ -25,25 +25,25 @@ related:
 
 import payoutHtml from '../../../snippets/payout.ts?shiki';
 
-A <ApiLink to="variables/src.topUp" /> or a <ApiLink to="variables/src.spend" /> finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time.
+A <ApiLink to="variables/economy-lab.topUp" /> or a <ApiLink to="variables/economy-lab.spend" /> finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time.
 
-So economy-lab models a payout as an explicit state machine. The operation becomes a stored record (a <ApiLink to="interfaces/src_ports.Saga" />) that the [background worker](/economy/reference/background-worker/) advances one safe step at a time.<Cite n={1} /> If a crash interrupts the work, the record resumes from its last recorded state. A step that runs twice still counts once.
+So economy-lab models a payout as an explicit state machine. The operation becomes a stored record (a <ApiLink to="interfaces/ports.Saga" />) that the [background worker](/economy/reference/background-worker/) advances one safe step at a time.<Cite n={1} /> If a crash interrupts the work, the record resumes from its last recorded state. A step that runs twice still counts once.
 
 ## Why it exists
 
-The alternative — paying synchronously inside <ApiLink to="variables/src.requestPayout" /> — couples a money posting to a network call the ledger doesn't control.
+The alternative — paying synchronously inside <ApiLink to="variables/economy-lab.requestPayout" /> — couples a money posting to a network call the ledger doesn't control.
 
 If the call hangs, the request hangs. If the process dies after the provider pays but before the ledger records it, the books and the provider disagree, with no record of why.
 
-A long-lived record makes every intermediate state durable and named: the worker can drive a payout forward from wherever it stopped, and an operator sees a stuck one rather than a silent gap.
+A long-lived record makes every intermediate state durable and named. The worker can drive a payout forward from wherever it stopped. An operator sees a stuck one rather than a silent gap.
 
-The same shape covers anything that outlives one request. [Subscriptions](/economy/concepts/subscriptions/) reuse it to renew period after period, and a promo grant's expiry is likewise a row the worker sweeps, not a thread it holds open.
+The same shape covers anything that outlives one request. [Subscriptions](/economy/concepts/subscriptions/) reuse it to renew period after period. A promo grant expires the same way: the worker sweeps a stored row rather than holding a thread open.
 
 ## The states
 
-`requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out) and opens a `Saga`, a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1481-L1487 · SAGA_STATES" />).
+`requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out). It also opens a `Saga`: a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1729-L1735 · SAGA_STATES" />).
 
-The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga. Watch the row appear:
+The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga. A row still sitting at `REQUESTED` means that opening transaction crashed partway through. The worker's claim sweep skips such rows on purpose — a half-opened payout is never driven forward. Watch the row appear:
 
 <Runnable name="payout" html={payoutHtml} />
 
@@ -58,19 +58,19 @@ The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAI
 
 ## The two triggers
 
-The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas, submits the saga's stored USD quote — priced once at request — via `processor.submitPayout`, records the `providerRef`, and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L342-L363 · submitToProvider" />).
+The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas and submits each saga's stored USD quote via `processor.submitPayout`. The quote was priced once, at request. The sweep records the `providerRef` and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L368-L389 · submitToProvider" />).
 
 It does not settle itself. Settlement arrives on the provider's verified "payout settled" webhook. That webhook maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, which the worker's inbox drain applies off the request path. That operation runs the `SUBMITTED → SETTLED` step.
 
-Failure arrives the same way, and promptly. The common real-world failure is asynchronous — the rail accepts a payout and only rejects it during processing — so a verified "payout failed" webhook maps to a [`reversePayout`](/economy/reference/operations/reverse-payout/) carrying `providerReported`, which returns the reserve as soon as the rail gives up instead of after the timeout. And when the processor adapter offers the optional `payoutStatus` probe, the sweep consults it on each look at a `SUBMITTED` saga: a provider-reported `FAILED` or `RETURNED` releases the reserve that run, a reported `SETTLED` blocks the force-fail (a lost settlement webhook must never end in a double-pay), and a reported `PENDING` defers the timeout while the rail is still working.
+Failure arrives the same way, and promptly. The common real-world failure is asynchronous: the rail accepts a payout and only rejects it during processing. So a verified "payout failed" webhook maps to a [`reversePayout`](/economy/reference/operations/reverse-payout/) carrying `providerReported`. That returns the reserve as soon as the rail gives up, instead of after the timeout. When the processor adapter offers the optional `payoutStatus` probe, the sweep consults it on each look at a `SUBMITTED` saga and acts on the reported status — [the processor port](/economy/ports/processor/) walks each case. The one rule worth repeating here: a reported `SETTLED` blocks the force-fail, because a lost settlement webhook must never end in a double-pay.
 
 ## What makes it safe to re-drive
 
 Three guards let the worker retry a step without paying twice.
 
 - **The call to the rail is idempotent**, keyed by the saga id (`key: saga.id`), so a retried submit still pays once. The settlement webhook is deduped on the provider's event id, so a redelivered settlement settles once.
-- **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise, so two sweeps racing the same saga can't both advance it (see <SourceLink to="src/ports.ts#L916-L922 · SagaStore.advance" />).
-- **A stuck payout is given up on.** Past `maxPayoutAttempts` failed attempts, or after `maxPayoutAgeMs` in `SUBMITTED` with no settlement webhook and no provider evidence to the contrary, the sweep force-fails it. It flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`), returning the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
+- **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise. So two sweeps racing the same saga can't both advance it. A step that re-asserts the state it is already in gets no exclusion from that predicate, because every racing sweep satisfies it; such a step passes `expectAttempts` as a second predicate, which is how the attempt counter stays exact (see <SourceLink to="src/ports.ts#L1098-L1104 · SagaStore.advance" />).
+- **A stuck payout is given up on.** A submit throw the rail classified non-retryable fails the payout at once — a refusal is not an unknown outcome to wait on. Otherwise `maxPayoutAttempts` only bounds how often the rail is re-asked, and it is `maxPayoutAgeMs` in `SUBMITTED` — with no settlement webhook and no provider evidence to the contrary — that force-fails a payout whose answer never came. Either way the sweep flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`). That returns the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
 
 <Callout type="warning">
   `requestPayout` only pays out
@@ -79,7 +79,7 @@ Three guards let the worker retry a step without paying twice.
   stricter gate rejects with
   [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/) unless the
   *cleared* portion covers the request (see{' '}
-  <SourceLink to="src/operations/requestPayout.ts#L74-L104">source</SourceLink>
+  <SourceLink to="src/operations/requestPayout.ts#L74-L104 · requestPayout">source</SourceLink>
   ). It also declines `BELOW_MINIMUM` under `payoutMinimumEarnedMinor` and
   `PAYOUT_TOO_SOON` within `payoutMinIntervalMs` of the user's last request.
 </Callout>
@@ -98,12 +98,12 @@ A `RESERVED` payout pays at most once, and its reserve is released exactly once:
 
 The enforcement lives in three places, and you can verify each one in the source.
 
-- **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L916-L958 · SagaStore" />).
-- **One transaction per step.** Each forward step posts its ledger entry and advances its record inside `store.transaction`, so a partial step rolls back whole: a flipped state with no posting, or a posting with no flip, can't persist.
-- **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L216-L232 · Processor" />), and inbound provider events are deduped by event id before they apply, so a redelivered webhook or a retried submit resolves to the same money move at most once.
+- **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L1023-L1065 · SagaStore" />).
+- **One transaction per step.** Each forward step posts its ledger entry and advances its record inside `store.transaction`, so a partial step rolls back whole. A flipped state with no posting, or a posting with no flip, can't persist.
+- **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L238-L254 · Processor" />). Inbound provider events are deduped by event id before they apply. So a redelivered webhook or a retried submit resolves to the same money move at most once.
 
 ## Operations and ports that rely on it
 
-[`requestPayout`](/economy/reference/operations/request-payout/) opens the saga; <ApiLink to="variables/src.settlePayout" /> and <ApiLink to="variables/src.reversePayout" /> move it. The worker's `payouts` sweep and its inbox drain drive transitions off the request path. The opening transaction's `meta.sagaId` names the saga, so the requester can follow it with `read.saga(sagaId)`.
+[`requestPayout`](/economy/reference/operations/request-payout/) opens the saga; <ApiLink to="variables/economy-lab.settlePayout" /> and <ApiLink to="variables/economy-lab.reversePayout" /> move it. The worker's `payouts` sweep and its inbox drain drive transitions off the request path. The opening transaction's `meta.sagaId` names the saga, so the requester can follow it with `read.saga(sagaId)`.
 
 The saga records persist through the `SagaStore` sub-store of the [`Store`](/economy/ports/storage/) port, and a payout's disbursement leaves through the [`Processor`](/economy/ports/processor/) port. The discipline the saga depends on — a compare-and-set on every transition, one transaction per step — is the same machinery that keeps the [ledger's integrity invariants](/economy/concepts/integrity/) intact under concurrency.

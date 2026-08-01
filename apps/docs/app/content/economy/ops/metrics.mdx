@@ -1,0 +1,60 @@
+---
+title: 'The metrics catalog'
+summary: 'Every metric the system emits through the Meter port, by name, with what a movement in each one means. Wire the port to your collector and these names are your dashboards; nothing here changes behavior.'
+plain: 'The gauges on the shop wall: how many sales rang up, how long the till took, how deep the outbox pile is. The needles only report — turning one does nothing.'
+order: 8
+status: stable
+sourceRefs:
+  [
+    'src/ports.ts · Meter',
+    'src/economy.ts · createEconomy',
+    'src/worker/index.ts · createWorker',
+  ]
+related:
+  [
+    'economy/ops/the-supervisor',
+    'economy/reference/background-worker',
+    'economy/ops/runbooks/outbox-backlog',
+  ]
+---
+
+Every measurement goes through the one <ApiLink to="interfaces/ports.Meter" />.
+Wire it to your collector and these names are the dashboard vocabulary. Advisories and the
+[supervisor](/economy/ops/the-supervisor/) read the same feed — nothing here is a control.
+
+## The submit pipeline
+
+| Metric | Movement means |
+| --- | --- |
+| `economy.submit` | One operation ran (tagged by kind and outcome). |
+| `economy.submit.ms` | Wall time of one `submit`, in milliseconds. |
+| `economy.submit.batch` | One `submitBatch` ran. |
+| `economy.webhook.duplicate` | A provider redelivered; the dedup answered without mutating. |
+| `economy.ratelimit.degraded` | The rate limiter threw and failed open — check the limiter. |
+| `economy.preflight.absence` | A boot noted a declined or missing external. |
+
+## The worker cycle
+
+| Metric | Movement means |
+| --- | --- |
+| `worker.sweep` | One full cycle ran. |
+| `worker.relay.backlog` | Outbox depth — the runbook fires past its threshold. |
+| `worker.relay.mark_failed` | A delivery exhausted its budget and dead-lettered. |
+| `worker.payouts.dead_lettered` / `pending_past_timeout` / `settlement_unreported` | The payout saga's three unhappy signals. |
+| `worker.checkpoint.seal_ms` / `verify` / `anchored` / `anchor_failed` | Seal latency, re-verification verdicts, anchor publishing. |
+| `worker.treasury.float` / `float_breach` / `breach` | USD backing level and the two breach alarms. |
+| `worker.reproof.horizon_age_ms` | Age of the rolling re-proof watermark. |
+| `worker.accrual.backlog` | Undrained accrual rows. |
+| `worker.orphans.scanned` / `open` / `settled` | Orphan-session sweep progress. |
+| `worker.archive.moved` | Postings moved to the cold store. |
+| `worker.retention.idempotency_deleted` / `sessions_pruned` | Retention deletions inside their horizons. |
+
+## The engines
+
+| Metric | Movement means |
+| --- | --- |
+| `engine.retry` / `engine.retry.recovered` | A serialization conflict, and whether the retry budget absorbed it. |
+| `engine.pool.acquire` / `engine.pool.acquire_ms` | Connection-pool pressure — the deadlock-storm runbook reads these. |
+
+Every runbook under [Ops](/economy/ops/the-supervisor/) names the metric it watches, so an
+alert routes straight to its page.

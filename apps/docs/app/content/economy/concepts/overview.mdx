@@ -10,12 +10,12 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/economy.ts#L100 · createEconomy',
-    'src/index.ts#L50',
+    'src/economy.ts#L124 · createEconomy',
+    'src/index.ts#L991 · memoryPorts',
     'test/conformance/invariants.adversarial.test.ts',
     'README.md',
   ]
-apiRefs: ['functions/src.createEconomy']
+apiRefs: ['functions/economy-lab.createEconomy']
 related: ['economy/concepts/money-model', 'economy/concepts/the-proof']
 ---
 
@@ -33,13 +33,13 @@ const outcome = await economy.submit(
     idempotencyKey: 'ord_1001',
     actor: systemActor('billing'),
     userId: 'usr_a1',
-    amount: toAmount('CREDIT', 5000n),
+    amount: toAmount('CREDIT', 60_000n), // the 600-credit bundle, about $5
     source: 'stripe',
   }),
 );
 
 const balance = await economy.read.balance(spendable('usr_a1'));
-// outcome.status → "committed" · balance.minor → 5000n
+// outcome.status → "committed" · balance.minor → 60000n
 ```
 
 Balances aren't stored and mutated. Every action becomes a balanced posting in an append-only, hash-chained ledger, and balances are folded back from those postings.
@@ -51,7 +51,7 @@ The project enforces several [invariants](/economy/concepts/the-proof/):
 - every spendable credit is backed by real cash
 - history can't be silently rewritten
 
-A [prover](/economy/concepts/the-proof/) re-checks all of them after every operation.
+An independent [prover](/economy/concepts/the-proof/) can re-check all of them at any moment.
 
 ## How it fits together
 
@@ -59,28 +59,28 @@ A [prover](/economy/concepts/the-proof/) re-checks all of them after every opera
 
 A `submit` is synchronous. It validates and authorizes the request first. Then it posts one balanced transaction to the [ledger](/economy/concepts/accounts-and-double-entry/), writing a matching event to an outbox in the same transaction. The [Economy API](/economy/reference/the-economy/) walks that request path step by step.
 
-Anything that outlives a request happens off that path: a [background worker](/economy/reference/background-worker/) drains the outbox and runs the recurring sweeps — payouts, subscriptions, promos, fees, and checkpoints, plus the history-lifecycle jobs that re-prove, archive, and expire old rows.
+Anything that outlives a request happens off that path. A [background worker](/economy/reference/background-worker/) drains the outbox and runs the recurring sweeps: payouts, subscriptions, promos, fees, and checkpoints. The same worker runs the history-lifecycle jobs that re-prove, archive, and expire old rows.
 
 ## A lab, not a product
 
-economy-lab is a runnable study of an application layer rather than a deployable money system. The ledger invariants are enforced to a production standard, while the operational edges (the payout [`Processor`](/economy/ports/processor/), the FX [`Rates`](/economy/ports/rates/) source, the regulated plumbing a money transmitter provides) are stubbed or simplified.
+economy-lab is a runnable study of an application layer, shipped with a proof-carrying reference service host. Running it as a production money system is a host responsibility the docs do not yet cover: the ledger invariants are enforced to a production standard, but the operational edges are stubbed or simplified — the payout [`Processor`](/economy/ports/processor/), the FX [`Rates`](/economy/ports/rates/) source, and the regulated plumbing a money transmitter provides. The [threat model](/economy/ops/threat-model/) states exactly what the reference host enforces and what stays the host's obligation.
 
-By default it runs entirely in memory with zero runtime dependencies; swappable [adapters](/economy/ports/storage/) run the same logic on Postgres, MySQL, Redis, and SQS, each held to the in-memory reference by a single conformance suite. What's intentionally out of scope has its own page: [scope and non-goals](/economy/scope-and-non-goals/).
+By default it runs entirely in memory with zero runtime dependencies. The [storage](/economy/ports/storage/) adapters run the same ledger logic on Postgres and MySQL; Redis backs the cache and the rate limiter, and the [messaging](/economy/ports/messaging/) adapter hands events to Amazon Simple Queue Service. Five conformance runners — store, cache, rate limiter, dispatcher, processor — hold each adapter to the in-memory reference. What's intentionally out of scope has its own page: [scope and non-goals](/economy/scope-and-non-goals/).
 
 ## Where the ideas come from
 
 economy-lab invents no cryptography and no accounting. It composes four well-established ideas into one ledger:
 
 - **Double-entry bookkeeping.** The rule that every posting balances is the method Luca Pacioli first set down in print in 1494. It's the foundation of [accounts & double-entry](/economy/concepts/accounts-and-double-entry/).
-- **Hash-linked tamper-evidence.** Hashing each record onto the one before it, so any later edit is detectable, comes from Haber and Stornetta's [_How to Time-Stamp a Digital Document_](https://link.springer.com/content/pdf/10.1007/BF00196791.pdf) (1991), the construction Bitcoin would later cite. economy-lab applies it one [hash chain](/economy/concepts/integrity/) per account.
-- **Merkle trees, Certificate Transparency, and Ed25519.** The signed [checkpoint](/economy/concepts/integrity/) folds every account's head into a single Merkle root and signs it. The hash tree is Ralph Merkle's, from his [1979 thesis](https://www.ralphmerkle.com/papers/Thesis1979.pdf) and [later patent](https://patents.google.com/patent/US4881264A/); the leaf/node domain separation follows [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) (Certificate Transparency); and the signature is [Ed25519](https://ed25519.cr.yp.to/) (Bernstein and colleagues).
-- **Sagas.** A payout that reaches an outside rail is modeled as a long-lived transaction advanced one compensatable step at a time, the [saga](/economy/concepts/payout-saga/) pattern from Garcia-Molina and Salem's [_Sagas_](https://sigmodrecord.org/1987/12/09/sagas/) (SIGMOD 1987).
+- **Hash-linked tamper-evidence.** Hashing each record onto the one before it makes any later edit detectable. The construction comes from Haber and Stornetta's [_How to Time-Stamp a Digital Document_](https://link.springer.com/content/pdf/10.1007/BF00196791.pdf) (1991), and Bitcoin would later cite it. economy-lab applies it one [hash chain](/economy/concepts/integrity/) per account.
+- **Merkle trees, Certificate Transparency, and Ed25519.** The signed [checkpoint](/economy/concepts/integrity/) folds every account's head into a single Merkle root and signs it. The hash tree is Ralph Merkle's, from his [1979 thesis](https://www.ralphmerkle.com/papers/Thesis1979.pdf) and [later patent](https://patents.google.com/patent/US4881264A/). The leaf/node domain separation follows [RFC 6962](https://datatracker.ietf.org/doc/rfc6962/) (Certificate Transparency). The signature is [Ed25519](https://ed25519.cr.yp.to/) (Bernstein and colleagues).
+- **Sagas.** A payout that reaches an outside rail is modeled as a long-lived transaction advanced one compensatable step at a time. That is the [saga](/economy/concepts/payout-saga/) pattern from Garcia-Molina and Salem's [_Sagas_](https://sigmodrecord.org/1987/12/09/sagas/) (SIGMOD 1987).
 
-economy-lab binds them together (accounting conservation, cryptographic tamper-evidence, and compensatable long-lived transactions) under one [prover](/economy/concepts/the-proof/) that re-checks all of them after every operation.
+economy-lab binds them together (accounting conservation, cryptographic tamper-evidence, and compensatable long-lived transactions) under one [prover](/economy/concepts/the-proof/) that independently re-checks all of them.
 
 ## Where to go next
 
 - New to the model? Start with [the money model](/economy/concepts/money-model/) and [accounts & double-entry](/economy/concepts/accounts-and-double-entry/).
 - Ready to call it? [The Economy](/economy/reference/the-economy/) covers construction and the `submit`/`read` loop; [operations](/economy/reference/operations/) lists everything you can submit, and [reads](/economy/reference/reads/) everything you can query.
 - Care about correctness? [Solvency](/economy/concepts/solvency/), [integrity](/economy/concepts/integrity/), and [the proof](/economy/concepts/the-proof/).
-- Curious how the sibling packages (money, @pwngh/taskq, economy-edge) plug in? [The packages](/economy/ports/packages/).
+- Curious how the smaller pieces (the optional @pwngh/taskq relay backend, the @pwngh/economy-edge sibling, the lab-local money arithmetic) plug in? [The packages](/economy/ports/packages/).

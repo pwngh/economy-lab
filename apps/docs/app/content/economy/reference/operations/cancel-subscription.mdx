@@ -5,11 +5,11 @@ order: 90
 status: stable
 sourceRefs:
   [
-    'src/operations/cancelSubscription.ts#L30 · cancelSubscription',
-    'src/operations/cancelSubscription.ts#L70 · assertMayCancel',
-    'src/operations/guards.ts#L166 · lifecycleMarker',
+    'src/operations/cancelSubscription.ts#L31 · cancelSubscription',
+    'src/operations/cancelSubscription.ts#L71 · assertMayCancel',
+    'src/operations/guards.ts#L167 · lifecycleMarker',
   ]
-apiRefs: ['variables/src.cancelSubscription']
+apiRefs: ['variables/economy-lab.cancelSubscription']
 related:
   [
     'economy/reference/operations/grant-entitlement',
@@ -19,21 +19,22 @@ related:
 
 import cancelSubscriptionHttp from '../../../../snippets/http/cancel-subscription.sh?shiki';
 
-<ApiLink to="variables/src.cancelSubscription" /> marks an active [`Subscription`](/economy/concepts/subscriptions/) `CANCELED`,
+<ApiLink to="variables/economy-lab.cancelSubscription" /> marks an active [`Subscription`](/economy/concepts/subscriptions/) `CANCELED`,
 so the [background worker's](/economy/reference/background-worker/) renewal sweep stops billing
 it. It moves no money.
 
-You submit it with just the subscription id:
+You submit it with the subscription id alone:
 
 <CallTabs name="cancel-subscription" http={cancelSubscriptionHttp}>
 
 ```ts
-const outcome = await economy.submit({
-  kind: 'cancelSubscription',
-  idempotencyKey: 'idem_1',
-  actor: { kind: 'user', userId: 'usr_a' },
-  subscriptionId: 'sub_abc',
-});
+const outcome = await economy.submit(
+  cancelSubscription({
+    idempotencyKey: 'cancel_sub_abc',
+    actor: userActor('usr_a'),
+    subscriptionId: 'sub_abc',
+  }),
+);
 // → { status: "committed", transaction: { id: "txn_…", … } }
 ```
 
@@ -42,13 +43,26 @@ const outcome = await economy.submit({
 Canceling forfeits the rest of the period already paid for. There is no refund, so
 there is nothing to post to the ledger.
 
+Declines are returned data. Narrow on `detail.reason`:
+
+```ts
+if (outcome.status === 'rejected') {
+  if (outcome.detail.reason === 'UNKNOWN_SUBSCRIPTION') {
+    const { subscriptionId } = outcome.detail; // no active record matched the id
+  }
+  if (outcome.detail.reason === 'ECONOMY_PAUSED') {
+    const resumesAt = outcome.detail.resumesAt; // when the maintenance window ends, or null
+  }
+}
+```
+
 ## Parameters
 
 The payload fields, beyond the `kind` tag, are:
 
 | Field            | Type                                                       | Default    | Description                                                                                                                             |
 | ---------------- | ---------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).                                 |
+| `idempotencyKey` | `string`                                                   | (required) | Dedupes retries under the same key. See [idempotency](/economy/concepts/idempotency/).                                 |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. A `user` actor may cancel only their own subscription; a `system` or `operator` actor may cancel anyone's.                |
 | `subscriptionId` | `string`                                                   | (required) | The subscription to cancel. Non-blank.                                                                                                   |
 
@@ -57,7 +71,7 @@ The payload fields, beyond the `kind` tag, are:
 `cancelSubscription` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the subscription is `CANCELED`. The placeholder
-  [`Transaction`](/economy/concepts/accounts-and-double-entry/) carries empty legs — no money moves.
+  [`Transaction`](/economy/concepts/accounts-and-double-entry/) carries empty legs. No money moves.
 - `duplicate`: a repeat of the same `idempotencyKey`.
 - `rejected`: the subscription is missing or already `CANCELED`, with
   `UNKNOWN_SUBSCRIPTION`. See [Reason codes](#reason-codes).
@@ -71,15 +85,15 @@ account's hash chain.
 ## Authorization
 
 A [`user`](/economy/concepts/actors-and-authorization/) actor may cancel only their own
-subscription. The handler loads the record and compares its owner to the actor's `userId`;
-a mismatch throws `AUTH.UNAUTHORIZED`.
+subscription. The handler loads the record and compares its owner to the actor's `userId`.
+A mismatch throws `AUTH.UNAUTHORIZED`.
 
 A `system` or `operator` actor may cancel anyone's subscription. `cancelSubscription` is
 not a privileged-only operation.
 
 <Callout type="note">
   The central [authorization](/economy/concepts/actors-and-authorization/) check
-  can't enforce ownership here: a cancel debits no user account, so its
+  can't enforce ownership here. A cancel debits no user account, so the
   ownership rule has nothing to inspect. The handler checks ownership itself,
   against the loaded subscription.
 </Callout>
@@ -87,7 +101,7 @@ not a privileged-only operation.
 ## Reason codes
 
 `cancelSubscription` returns these [reason codes](/economy/reference/outcomes-and-reason-codes/)
-as a `rejected` outcome, a normal "no", not a thrown fault:
+as a `rejected` outcome:
 
 | Code                   | When                                                                                          |
 | ---------------------- | --------------------------------------------------------------------------------------------- |
@@ -103,11 +117,11 @@ A malformed request throws instead:
 
 ## Preconditions and invariants
 
-The ownership check runs only after the subscription is confirmed to exist and be cancelable.
-So probing a missing or already-canceled id returns the same `UNKNOWN_SUBSCRIPTION` answer
-regardless of caller, and never reveals whether the id exists.
+The handler confirms the subscription exists and is cancelable before it runs the ownership
+check. So a probe with a missing or already-canceled id returns the same `UNKNOWN_SUBSCRIPTION`
+answer regardless of caller. The answer never reveals whether the id exists.
 
-Canceling is final for that record: a `CANCELED` subscription stays canceled, and a second
+Canceling is final for that record. A `CANCELED` subscription stays canceled. A second
 cancel of the same id returns `UNKNOWN_SUBSCRIPTION` rather than committing again. To bill the
 same SKU and seller again, the user runs [`subscribe`](/economy/reference/operations/subscribe/)
 to open a fresh subscription.

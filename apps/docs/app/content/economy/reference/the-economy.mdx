@@ -5,9 +5,9 @@ order: 5
 status: stable
 sourceRefs:
   [
-    'src/index.ts#L83 · createEconomy',
-    'src/economy.ts#L100 · createEconomy',
-    'src/contract.ts#L525 · Economy',
+    'src/index.ts#L90 · createEconomy',
+    'src/economy.ts#L124 · createEconomy',
+    'src/contract.ts#L567 · Economy',
   ]
 related:
   [
@@ -19,7 +19,7 @@ related:
 
 import theEconomyHtml from '../../../snippets/the-economy.ts?shiki';
 
-An <ApiLink to="interfaces/src.Economy" /> is the object you hold and call. It has a small surface: one `submit` to change money (with `submitBatch` for bursts), a `read` group to look at state, `capacity` for the growth gauges, and `close` to shut down.
+An <ApiLink to="interfaces/economy-lab.Economy" /> is the object you hold and call. It has a small surface: one `submit` to change money (with `submitBatch` for bursts), a `read` group to look at state, `capacity` for the growth gauges, and `close` to shut down.
 
 ```ts
 import { createEconomy } from '@pwngh/economy-lab';
@@ -30,11 +30,11 @@ const balance = await economy.read.balance(account); // look, never change
 await economy.close(); // release the store
 ```
 
-You build it from a set of injected ports (a <ApiLink to="interfaces/src_ports.Store" />, a <ApiLink to="interfaces/src_ports.Signer" />, a <ApiLink to="interfaces/src_ports.Processor" />, a `Rates`, a `FeePolicy`, a clock, and an id source) so the core never reaches for a database driver or a wall clock. Pass in-memory ports to run the same economy with no external infrastructure.
+You build it from a set of injected ports: a <ApiLink to="interfaces/ports.Store" />, a <ApiLink to="interfaces/ports.Signer" />, a <ApiLink to="interfaces/ports.Processor" />, a `Rates`, a `FeePolicy`, a clock, and an id source. The core therefore never reaches for a database driver or a wall clock. Pass in-memory ports to run the same economy with no external infrastructure.
 
 ## Construction
 
-`createEconomy(ports)` is the one call: hand it a full <ApiLink to="types/src_ports.Ports" /> bag and it assembles the economy, synchronously. <ApiLink to="functions/src.memoryPorts" /> builds a batteries-included in-memory bag: the in-memory `Store`, a dev `Signer`, a dev <ApiLink to="interfaces/src_ports.Rates" /> table, a flat <ApiLink to="types/src.FeePolicy" />, and an in-memory `Processor`, all wired. No environment, no infrastructure:
+`createEconomy(ports)` is the one call. Hand it a full <ApiLink to="types/ports.Ports" /> bag, and it assembles the economy synchronously. <ApiLink to="functions/economy-lab.memoryPorts" /> builds a batteries-included in-memory bag: the in-memory `Store`, a dev `Signer`, a dev <ApiLink to="interfaces/ports.Rates" /> table, a flat <ApiLink to="types/economy-lab.FeePolicy" />, and an in-memory `Processor`, all wired. It needs no environment and no infrastructure:
 
 ```ts
 import { createEconomy, memoryPorts } from '@pwngh/economy-lab';
@@ -42,7 +42,7 @@ import { createEconomy, memoryPorts } from '@pwngh/economy-lab';
 const economy = createEconomy(memoryPorts({ signingKey: 'dev-signing-key' }));
 ```
 
-<ApiLink to="functions/src.openPorts">openPorts(env, init?)</ApiLink> resolves the bag from the environment instead: the `Store` from `DATABASE_URL` (a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store), and the external ports, config, and secrets from their own keys. Outside production it fills sane defaults for anything absent; in production it requires each external port set or expressly declined, and fails fast with one message naming everything missing. Any field you pass in `init` wins over the env-derived one:
+<ApiLink to="functions/economy-lab.openPorts">openPorts(env, init?)</ApiLink> resolves the bag from the environment instead. It picks the `Store` from `DATABASE_URL`: a `postgres://` or `mysql://` connection string picks that engine, and an unset value falls back to the in-memory store. It resolves the external ports, config, and secrets from their own keys. Outside production, it fills sane defaults for anything absent. In production, it requires each external port to be set or expressly declined, and it fails fast with one message naming everything missing. Any field you pass in `init` wins over the env-derived one:
 
 ```ts
 import { createEconomy, openPorts } from '@pwngh/economy-lab';
@@ -53,7 +53,7 @@ const economy = createEconomy(await openPorts(process.env));
 const withLiveRates = createEconomy(await openPorts(process.env, { rates: liveRates() }));
 ```
 
-A host that wants the whole stack from one call uses <ApiLink to="functions/src.boot" />, which opens the ports, assembles the economy over them, and builds the [background worker](/economy/reference/background-worker/) over the same bag (pass `worker: false` to skip it):
+A host that wants the whole stack from one call uses <ApiLink to="functions/economy-lab.boot" />. It opens the ports, assembles the economy over them, and builds the [background worker](/economy/reference/background-worker/) over the same bag. Pass `worker: false` to skip the worker:
 
 ```ts
 import { boot } from '@pwngh/economy-lab';
@@ -61,36 +61,36 @@ import { boot } from '@pwngh/economy-lab';
 const { ports, economy, worker } = await boot(process.env);
 ```
 
-Each driver is imported only when its environment variable selects it, so a deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `openPorts` reads.
+Each driver is imported only when its environment variable selects it. A deployment installs only what it uses. See [configuration](/economy/reference/configuration/) for every variable `openPorts` reads.
 
-The in-memory economy bundles for the browser with no aliases or stubs: every Node API and driver sits behind a runtime guard, and a gate (`npm run check:browser`) bundles the entry with esbuild's browser platform on every check to keep it that way. The runnable blocks across this handbook are that property at work.
+The in-memory economy bundles for the browser with no aliases or stubs. Every Node API and driver sits behind a runtime guard. A gate (`npm run check:browser`) bundles the entry with esbuild's browser platform on every check to keep it that way. The runnable blocks across this handbook are that property at work.
 
 ## submit
 
-`submit(operation)` applies one [`Operation`](/economy/reference/operations/) and resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). The operation names the action and carries an `idempotencyKey`, so a retried request runs at most once.
+`submit(operation)` applies one [`Operation`](/economy/reference/operations/) and resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/). The operation names the action and carries an `idempotencyKey` — a retried request runs at most once.
 
 <SubmitPipeline />
 
-Here a user tops up their balance and the balance visibly moves; the result tells you whether it `committed`, repeated an earlier request (`duplicate`), or was declined (`rejected`). Run it — then click into the code, change the amount, and run yours:
+Here a user tops up their balance, and the balance visibly moves. The result tells you whether it `committed`, repeated an earlier request (`duplicate`), or was declined (`rejected`). Run it. Then click into the code, change the amount, and run yours:
 
 <Runnable name="the-economy" html={theEconomyHtml} />
 
-A `rejected` outcome is a normal "no" returned as data, not an error; a genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
+A `rejected` outcome is a normal "no" returned as data, not an error. A genuine fault throws instead. See [outcomes and reason codes](/economy/reference/outcomes-and-reason-codes/) for the full set.
 
-Every submit is also metered through the injected <ApiLink to="interfaces/src_ports.Meter" />: one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms` — request-path telemetry without wrapping `submit` yourself.
+The economy also meters every submit through the injected <ApiLink to="interfaces/ports.Meter" />. It records one count under `economy.submit`, tagged by operation kind and how it resolved (`committed`, `duplicate`, `rejected`, or `fault`), plus its duration under `economy.submit.ms`. You get request-path telemetry without wrapping `submit` yourself.
 
 ### Caveats
 
 - A business "no" is a returned `rejected` outcome, never a throw. A throw means the request itself is broken (`OP.MALFORMED`, `AUTH.UNAUTHORIZED`) or infrastructure failed — a caller bug or an outage, not a decline.
-- Amounts are minor units as `bigint`: <ApiLink to="functions/src.toAmount">toAmount('CREDIT', 12_000n)</ApiLink> is 120 credits, or <ApiLink to="functions/src.credits">credits(120)</ApiLink> with the whole-unit shorthand. There is no float anywhere in the money path.
-- A `duplicate` outcome carries the original transaction. Treat it as success — the work is done — not as an error.
+- Amounts are minor units as `bigint`: <ApiLink to="functions/economy-lab.toAmount">toAmount('CREDIT', 12_000n)</ApiLink> is 120 credits, or <ApiLink to="functions/economy-lab.credits">credits(120)</ApiLink> with the whole-unit shorthand. There is no float anywhere in the money path.
+- A `duplicate` outcome carries the original transaction. Treat it as success; the work is done.
 - A rejected request leaves its idempotency key unused, so the same key can retry after the condition clears.
 
 ## Batches and bursts
 
-`submitBatch(operations)` runs several _independent_ operations through one database commit and returns a <ApiLink to="types/src.BatchOutcome" /> per slot, index-aligned with the input. Each operation keeps its own verdict: a slot can commit, reject, or fault without touching its neighbors — a slot that fails rolls back alone — and two slots carrying the same idempotency key fault the later one rather than double-run it. On a store without batch transactions the call degrades to sequential submits, same results, one commit each. Every batch counts once under the `economy.submit.batch` meter.
+`submitBatch(operations)` runs several _independent_ operations through one database commit. It returns a <ApiLink to="types/economy-lab.BatchOutcome" /> per slot, index-aligned with the input. Each operation keeps its own verdict. A slot can commit, reject, or fault without touching its neighbors, and a slot that fails rolls back alone. Two slots that carry the same idempotency key resolve the later one as `duplicate` carrying the first's transaction, the same answer a repeat of a lone `submit` gets. On a store without batch transactions, the call degrades to sequential submits with the same results and one commit each. Every batch counts once under the `economy.submit.batch` meter.
 
-Most hosts never call it directly. <ApiLink to="functions/src.createSubmitCoalescer" /> wraps it as a drop-in `submit` that gathers the concurrent calls of one event-loop turn into a single batch — a burst pays one commit instead of one each, and every caller still receives exactly what a direct `submit` would have produced:
+Most hosts never call it directly. <ApiLink to="functions/economy-lab.createSubmitCoalescer" /> wraps it as a drop-in `submit` that gathers the concurrent calls of one event-loop turn into a single batch. A burst pays one commit instead of one each. Every caller still receives exactly what a direct `submit` would have produced:
 
 ```ts
 import { createEconomy, createSubmitCoalescer } from '@pwngh/economy-lab';
@@ -102,28 +102,28 @@ const lane = createSubmitCoalescer(economy); // maxBatch 16, flushes per microta
 const outcome = await lane.submit(operation);
 ```
 
-A wider window is a host decision: pass `defer` with a short timer to trade a few milliseconds of latency for more batching. A call carrying per-call <ApiLink to="types/src_ports.CallOptions" /> bypasses the queue and submits directly.
+A wider window is a host decision. Pass `defer` with a short timer to trade a few milliseconds of latency for more batching. A call that carries per-call <ApiLink to="types/ports.CallOptions" /> bypasses the queue and submits directly.
 
 ## read
 
 `read` is the look-but-don't-change surface: balances, statements, a posting or saga by id, entitlement checks, the account, payout, and posting journals, the pause status, and the solvency proof.
 
-Reading one account's balance is a single call that returns an <ApiLink to="types/src.Amount" />:
+Reading one account's balance is a single call that returns an <ApiLink to="types/economy-lab.Amount" />:
 
 ```ts
 import { spendable } from '@pwngh/economy-lab';
 
 const balance = await economy.read.balance(spendable('usr_a1'));
-// → { currency: "CREDIT", minor: 5000n }
+// → { currency: "CREDIT", minor: 60000n } — 600 credits
 ```
 
 See [reads](/economy/reference/reads/) for the whole surface and what each method returns.
 
 ## capacity
 
-`capacity()` returns a <ApiLink to="types/src.CapacityReport" />: the live gauges of everything that grows for the life of the economy — total postings (`historySize`), the [re-proof](/economy/concepts/integrity/) watermark's age, the latest checkpoint's age, the [accrual](/economy/concepts/accrual-split/) backlog, session and reservation footprints, and the secondary-table row counts. A gauge the store cannot measure comes back `null` — unknown, never zero.
+`capacity()` returns a <ApiLink to="types/economy-lab.CapacityReport" />: the live gauges of everything that grows for the life of the economy. The gauges cover total postings (`historySize`), the [re-proof](/economy/concepts/integrity/) watermark's age, the latest checkpoint's age, the [accrual](/economy/concepts/accrual-split/) backlog, session and reservation footprints, and the secondary-table row counts. A gauge the store cannot measure comes back `null` — unknown, never zero.
 
-`advisories` are stated facts against <ApiLink to="variables/src.CAPACITY_THRESHOLDS" />, the documented crossover constants: the system informs, the host decides, and no advisory ever changes behavior. When `historySize` crosses its threshold, the answer is [archival](/economy/ops/archival/); when a backlog ages past its bound, the answer is the [worker](/economy/reference/background-worker/) cadence.
+`advisories` are stated facts against <ApiLink to="variables/economy-lab.CAPACITY_THRESHOLDS" />, the documented crossover constants. The system informs, and the host decides. No advisory ever changes behavior. When `historySize` crosses its threshold, the answer is [archival](/economy/ops/archival/). When a backlog ages past its bound, the answer is the [worker](/economy/reference/background-worker/) cadence.
 
 ## close
 
@@ -145,9 +145,9 @@ submit(operation) ─▶ validate · authorize · post ─▶ Ledger (append-onl
 
 Validation rejects a malformed operation before any work begins: a blank `idempotencyKey`, an ownerless wallet account, an out-of-range amount. Authorization decides whether this `actor` may run this kind of operation, so a forbidden request stops before money moves.
 
-The post then runs inside one all-or-nothing transaction. It appends the balanced [double-entry](/economy/concepts/accounts-and-double-entry/) legs to the ledger and enqueues the matching event into the outbox in that same transaction, so the two commit together or not at all; a rollback can't leave a stray event in the outbox.
+The post then runs inside one all-or-nothing transaction. It appends the balanced [double-entry](/economy/concepts/accounts-and-double-entry/) legs to the ledger and enqueues the matching event into the outbox in that same transaction. The two commit together or not at all. A rollback can't leave a stray event in the outbox.
 
-A `read.balance` returns a stored running total, so it's a single O(1) read rather than a re-sum of history. The ledger entries stay the source of truth: the [prover](/economy/concepts/the-proof/) re-derives each balance and reports drift.
+A `read.balance` returns a stored running total, so it's a single O(1) read rather than a re-sum of history. The ledger entries stay the source of truth. The [prover](/economy/concepts/the-proof/) re-derives each balance and reports drift.
 
 The background sweeps that drain the outbox and do the rest of the deferred work run off this path on their own schedule. See the [background worker](/economy/reference/background-worker/).
 
@@ -155,7 +155,7 @@ The background sweeps that drain the outbox and do the rest of the deferred work
 
 ### My retry charged the buyer twice
 
-The retry minted a fresh `idempotencyKey`, so the engine saw two different operations. The key is how a retry is recognized: mint it once, from the action's own identity, and reuse it on every attempt.
+The retry minted a fresh `idempotencyKey`, so the engine saw two different operations. The key is how the engine recognizes a retry. Mint it once, from the action's own identity, and reuse it on every attempt.
 
 ```ts
 const idempotencyKey = `ord_${order.id}`; // from the order, minted once
@@ -169,4 +169,4 @@ const retried = await economy.submit(spend({ idempotencyKey, ...details }));
 
 ### `submit` throws instead of rejecting
 
-A throw is not a decline. It means the request itself was broken before any business question was asked: a `user` actor acting on someone else's account (`AUTH.UNAUTHORIZED`), a blank key or malformed payload (`OP.MALFORMED`), or a store outage. Check the `actor` against the account being drained first — see [rejected versus thrown](/economy/reference/outcomes-and-reason-codes/#rejected-versus-thrown) and [actors & authorization](/economy/concepts/actors-and-authorization/).
+A throw is not a decline. It means the request itself was broken before any business question was asked: a `user` actor acting on someone else's account (`AUTH.UNAUTHORIZED`), a blank key or malformed payload (`OP.MALFORMED`), or a store outage. Check the `actor` against the account being drained first. See [rejected versus thrown](/economy/reference/outcomes-and-reason-codes/#rejected-versus-thrown) and [actors & authorization](/economy/concepts/actors-and-authorization/).

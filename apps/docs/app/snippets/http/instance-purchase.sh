@@ -6,3 +6,4 @@ curl -s https://economy.example/instances/wrld_1043/purchase \
     "recipients": [{ "sellerId": "usr_creator", "shareBps": 10000 }],
     "product": { "sku": "wrld_1043:jetpack", "kind": "permanent" }
   }'
+# → { "status": "accepted", "orderId": "…", "seq": 1 }

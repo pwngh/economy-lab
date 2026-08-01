@@ -1,0 +1,49 @@
+---
+title: 'The retention contract'
+summary: 'No route is a guaranteed-history path over the live store. History replay is the canonical export plus the archive sink; the hot tables carry a stated horizon per surface, and every read that serves history serves it under this contract.'
+plain: 'The counter keeps recent receipts in a drawer; older ones move to the vault. Anyone who needs the full record asks for the certified copy — nobody is promised that the drawer holds everything forever.'
+order: 7
+status: stable
+sourceRefs:
+  [
+    'src/worker/retention.ts · sweepRetention',
+    'src/worker/archive.ts · archiveSealedPrefix',
+    'src/economy.ts · createEconomy',
+  ]
+related:
+  [
+    'economy/ops/archival',
+    'economy/reference/offline-verification',
+    'economy/reference/reads',
+  ]
+---
+
+An append-only ledger accumulates history for the life of the economy, and the
+[archive and retention sweeps](/economy/ops/archival/) exist so the hot store does not
+carry all of it forever. That creates one contract every consumer of history must know.
+
+## What the live store still answers, and what it does not
+
+- **The live store serves a window, not an archive.** Statements, postings, and lineage
+  reads answer from hot storage. Once the archive sweep has moved a sealed prefix to the
+  cold store, those rows are no longer served by the live reads — by design, with the
+  pruned edge still provable.
+- **Replay is the export plus the archive sink.** The complete, verifiable record is the
+  canonical ledger export (`economy.read.export()`, `economy db backup`) composed with the
+  pages in the host's `ArchiveSink`. The export carries the signed archive boundary, so
+  offline verification proves the hot chain back to the boundary and the boundary's
+  signature vouches for everything that moved.
+- **Secondary rows have horizons.** Idempotency rows and settled sessions are pruned past
+  their configured ages (`idempotencyOlderThanMs`, `sessionsOlderThanMs`) — a settled
+  session only after its settle posting re-proves. A replay of a years-old idempotency key
+  is answered by the ledger's own dedup, not by the pruned row.
+- **No route promises unbounded history.** A public promise of full history over the live
+  store would freeze retention into a forever contract; the lab refuses to make it, and
+  any page or client built on the reads must not imply it.
+
+## What this means for integrators
+
+Build dashboards and statements on the live reads; build audits and compliance archives on
+the export plus the sink. When a consumer needs both, the
+[offline verification page](/economy/reference/offline-verification/) shows how the two
+compose into one proof.

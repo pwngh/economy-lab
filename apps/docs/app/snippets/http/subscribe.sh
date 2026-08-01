@@ -2,7 +2,7 @@ curl -s https://economy.example/submit \
   -H 'content-type: application/json' \
   -d '{
     "kind": "subscribe",
-    "idempotencyKey": "idem_1",
+    "idempotencyKey": "sub_usr_a_club_pass",
     "actor": { "kind": "user", "userId": "usr_a" },
     "userId": "usr_a",
     "sellerId": "usr_s",
@@ -10,3 +10,4 @@ curl -s https://economy.example/submit \
     "price": "CREDIT:500.00",
     "periodMs": 2592000000
   }'
+# → { "status": "committed", "transaction": { "id": "txn_…", … } }

@@ -5,7 +5,7 @@ plain: "“Idempotent” is a fancy word for “safe to repeat”: do it once or
 order: 55
 status: stable
 sourceRefs:
-  ['src/ports.ts#L666 · IdempotencyStore', 'src/economy.ts#L620 · runClaimed']
+  ['src/ports.ts#L763 · IdempotencyStore', 'src/economy.ts#L875 · runClaimed']
 related:
   [
     'economy/reference/the-economy',
@@ -18,9 +18,9 @@ import idempotencyHtml from '../../../snippets/idempotency.ts?shiki';
 import challengeHtml from '../../../snippets/challenge-idempotency.ts?shiki';
 import challengeSolutionHtml from '../../../snippets/challenge-idempotency.solution.ts?shiki';
 
-Networks drop responses and processes crash mid-write. A caller that never hears back can't know whether its operation applied, so it retries; the platform has to make that safe: a retried operation takes effect at most once.
+Networks drop responses and processes crash mid-write. A caller that never hears back cannot know whether its operation applied, so it retries. The platform has to make that safe: a retried operation takes effect at most once.
 
-Every operation carries an <ApiLink to="functions/src.idempotencyKey" />. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
+Every operation carries an <ApiLink to="functions/economy-lab.idempotencyKey" />. The key is how the system recognizes a retry and replays the original result instead of repeating the work.
 
 ## The idea
 
@@ -69,13 +69,13 @@ const retried = await economy.submit(
 
 ## Why it exists
 
-[Conservation and solvency](/economy/concepts/solvency/) only hold if each operation posts once. A double-applied top-up would issue credits twice against a single payment; a double-applied payout would pay a seller twice for one request. Idempotency is what lets a client retry freely, as it must over an unreliable network, without risking either.
+[Conservation and solvency](/economy/concepts/solvency/) only hold if each operation posts once. A double-applied top-up would issue credits twice against a single payment. A double-applied payout would pay a seller twice for one request. Idempotency is what lets a client retry freely, as it must over an unreliable network, without risking either.
 
-It's also what upgrades the write path from at-most-once to **exactly-once**: the [atomic commit](/economy/ports/storage/) lands each attempt fully or not at all, and idempotent retries let the caller resend until one attempt commits. The money moves once, however many tries that takes.
+Idempotency also upgrades the write path from at-most-once to **exactly-once**. The [atomic commit](/economy/ports/storage/) lands each attempt fully or not at all, and idempotent retries let the caller resend until one attempt commits. The money moves once, however many tries that takes.
 
 ## How a key is claimed
 
-Claiming is a database operation, so the database itself stops two requests with the same key from both proceeding. The mechanism differs by engine, but the contract is the same:
+Claiming is a database operation: the database itself stops two requests with the same key from both proceeding. The mechanism differs by engine, but the contract is the same:
 
 - **Postgres** takes a transaction-scoped advisory lock on the key. A second request with the same key waits for the first to finish, then reads and replays its recorded row.
 - **MySQL** inserts a placeholder row to hold the key's lock, then fills in the recorded result on commit. A second insert collides on the primary key.
@@ -95,15 +95,15 @@ A caller can retry a rejected request under the _same_ key — a decline isn't p
   request under that key starts fresh.
 </Callout>
 
-## The horizon is the host's
+## The host sets the horizon
 
-Claims live forever by default. A host that opts into the [retention sweep](/economy/ops/archival/)'s `idempotencyOlderThanMs` bounds that: a claim older than the horizon is deleted, and a duplicate request arriving after the deletion re-executes instead of replaying. The guarantee on this page holds exactly up to the horizon, which is why the horizon must exceed every window in which a caller could still retry.
+Claims live forever by default. A host can bound that with the [retention sweep](/economy/ops/archival/) option `idempotencyOlderThanMs`. A claim older than the horizon is deleted, and a duplicate request arriving after the deletion re-executes instead of replaying. The guarantee on this page holds exactly up to the horizon. That is why the horizon must exceed every window in which a caller could still retry.
 
 ## What relies on it
 
 - Every [`submit`](/economy/reference/the-economy/) runs through this guard, so the property is universal: no operation can be applied twice.
 - The [`duplicate` outcome](/economy/reference/outcomes-and-reason-codes/) is the visible result of a replay: the same transaction, no new work.
-- Inbound [provider webhooks](/economy/ports/processor/) carry their own, separate dedup guard keyed on the webhook's event id, kept apart from this table so the two layers can't collide on a shared key.
+- Inbound [provider webhooks](/economy/ports/processor/) carry their own, separate dedup guard keyed on the webhook's event id. Keeping it apart from this table means the two layers cannot collide on a shared key.
 
 ## Try it
 

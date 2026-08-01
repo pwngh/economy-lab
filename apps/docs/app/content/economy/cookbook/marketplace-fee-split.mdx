@@ -3,7 +3,7 @@ title: 'A marketplace fee split'
 summary: 'One sale, several sellers: the fee off the top, shares in basis points, no unclaimed remainder.'
 order: 30
 status: stable
-sourceRefs: ['src/pricing.ts#L60 · splitLegs', 'src/operations/spend.ts#L80 · spend']
+sourceRefs: ['src/pricing.ts#L56 · splitLegs', 'src/operations/spend.ts#L81 · spend']
 related:
   [
     'economy/reference/operations/spend',
@@ -34,4 +34,4 @@ which is the balance [`requestPayout`](/economy/reference/operations/request-pay
 out as real money. A [`refund`](/economy/reference/operations/refund/) of the order unwinds every
 share — both sellers and the fee — in one opposite posting. (Under [the accrual
 split](/economy/concepts/accrual-split/), the cut parks first and the worker's drain sweep moves
-it to <ApiLink to="functions/src.earned" /> in batches; the shares and the refund path are the same.)
+it to <ApiLink to="functions/economy-lab.earned" /> in batches; the shares and the refund path are the same.)

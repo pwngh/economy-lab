@@ -5,8 +5,8 @@ order: 30
 status: stable
 sourceRefs:
   [
-    'src/server.ts#L185 · createServer',
-    'scripts/main.ts#L404 · runServe',
+    'src/server.ts#L302 · createServer',
+    'economy/app.ts',
     'test/server.test.ts',
   ]
 related: ['economy/scope-and-non-goals', 'economy/ports/signer']
@@ -16,9 +16,9 @@ import instancePurchaseHttp from '../../../snippets/http/instance-purchase.sh?sh
 
 ## The request-path counterpart to the Economy
 
-Most of these docs talk about the [`Economy`](/economy/reference/the-economy/) as an in-process object: you hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. That's what the HTTP service is: a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
+Most of these docs treat the [`Economy`](/economy/reference/the-economy/) as an in-process object. You hold a reference and call `submit` against it directly. But a deployed service has to take requests off a socket. The HTTP service does that job. It is a thin wrapper that turns a Fetch `Request` into one `submit` call and a `Response`.
 
-<SourceLink to="src/server.ts#L80">createServer</SourceLink> takes one options object — the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`; a full <ApiLink to="types/src_ports.Ports" /> is assignable), and an `authenticate` posture — and returns a handler with the signature `(request: Request) => Promise<Response>`:
+<SourceLink to="src/server.ts#L302">createServer</SourceLink> takes one options object and returns a handler with the signature `(request: Request) => Promise<Response>`. The options carry the `Economy`, the narrow `ports` pick the routes read (`config`, `secrets`, `clock`, `meter`, `logger`, `rates`), and an `authenticate` posture. A full <ApiLink to="types/ports.Ports" /> is assignable as the ports pick:
 
 ```ts
 import { createServer } from '@pwngh/economy-lab';
@@ -27,18 +27,18 @@ const handler = createServer({ economy, ports, authenticate });
 const response = await handler(new Request('http://service/healthz'));
 ```
 
-It uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs, so the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The wiring in `scripts/main.ts` (covered below) is what bridges it onto a concrete runtime.
+The handler uses only Fetch globals (`Request`, `Response`, `URL`, `crypto.subtle`) and no Node APIs, so the same handler runs on Node, Bun, Deno, and Cloudflare Workers. The `economy` bin (covered below) mounts it on a concrete runtime.
 
 <Callout type="note">
   This page documents the HTTP edge: the routes, the wire format, and the
-  webhook gate. It does not re-document what each operation *means*; that lives
-  with the operations. The service decodes a body and hands it to `submit`;
-  everything past that boundary is the in-process economy.
+  webhook gate. It does not re-document what each operation *means*. That
+  meaning lives with the operations. The service decodes a body and hands it to
+  `submit`. Everything past that boundary is the in-process economy.
 </Callout>
 
 ## What it exposes
 
-The handler routes five paths and answers `404` to everything else. Three move money or report state; two are for your orchestrator.
+The handler routes these five paths plus the `/v1` read family below, and answers `404` to everything else. Three routes move money or report state. Two are for your orchestrator.
 
 | Method and path                   | What it does                                                                                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -48,11 +48,36 @@ The handler routes five paths and answers `404` to everything else. Three move m
 | `GET /healthz`                    | Report liveness without touching storage.                                                                                                |
 | `GET /readyz`                     | Report readiness via one cheap store-touching read.                                                                                      |
 
+## The /v1 reads
+
+The read family serves the storefront over the wire, behind the same limiter as `/submit`
+and with `x-request-id` echoed. A `user` token reads only itself; `system` and `operator`
+tokens name a subject with `?userId=`. Lists take `?limit=` and `?cursor=`, and each page
+carries the `cursor` that resumes it — hand it back to read the next page, and `null` means
+the list ended. The token is opaque and names a position, never a subject: the scope of every
+page comes from the caller's own token. The server, not the caller, bounds what one request
+can pull: a bad or missing `limit` collapses to the default page (50), and an oversized ask
+caps at the ceiling (200) — never a `400`. An unknown `?state=` value does answer `400`,
+because an empty page would read as "none exist".
+
+| Route | Serves |
+| --- | --- |
+| `GET /v1/wallet` | The three balances plus `payableNow`; a wallet of zeros never 404s. |
+| `GET /v1/entitlements` | Non-revoked grants, expired included. |
+| `GET /v1/subscriptions` | Every subscription, all states; `?state=` filters. |
+| `GET /v1/payouts` | The payout board for one user; `?state=` filters. |
+| `GET /v1/rates` | The buy, par, and payout rates in force. |
+| `GET /v1/catalog` | The top-up bundles; skus stay host-owned and dynamic. |
+| `GET /v1/posting/{txnId}` | One posting — a user sees it only if one of its legs touched them; a foreign transaction reads as absent. |
+
+`ServerOptions.reads: false` unmounts the family. History served here lives under the
+[retention contract](/economy/ops/retention/).
+
 ## Submitting an operation
 
-`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object; you get back its `Outcome`. The body's `kind` selects the operation: <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.refund" />, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example: the HTTP tab is the same call as a `curl` against this route.
+`POST /submit` is the request-path version of a `submit` call. You send one operation as a JSON object. You get back its `Outcome`. The body's `kind` selects the operation: <ApiLink to="variables/economy-lab.topUp" />, <ApiLink to="variables/economy-lab.spend" />, <ApiLink to="variables/economy-lab.refund" />, and the rest. Every [operation page](/economy/reference/operations/) shows both forms of its example. The HTTP tab is the same call as a `curl` against this route.
 
-One detail matters on the wire: money never travels as a JSON number. A JSON number can't safely hold the integer minor-units an [`Amount`](/economy/concepts/money-model/) carries, so money fields arrive as decimal strings like `CREDIT:10.00` and the server decodes them back into `Amount` values. Here's a `topUp` body:
+One detail matters on the wire. Money never travels as a JSON number, because a JSON number can't safely hold the integer minor-units an [`Amount`](/economy/concepts/money-model/) carries. So money fields arrive as decimal strings like `CREDIT:600.00`, and the server decodes them back into `Amount` values. Here's a `topUp` body (the 600-credit bundle, about $5):
 
 ```json
 {
@@ -61,20 +86,20 @@ One detail matters on the wire: money never travels as a JSON number. A JSON num
   "actor": { "kind": "system", "service": "checkout" },
   "userId": "usr_buyer",
   "source": "card",
-  "amount": "CREDIT:10.00"
+  "amount": "CREDIT:600.00"
 }
 ```
 
-A committed operation comes back `200` with its transaction, each [leg's](/economy/concepts/accounts-and-double-entry/) amount written as the same decimal string:
+A committed operation comes back `200` with its transaction. Each [leg's](/economy/concepts/accounts-and-double-entry/) amount is written as the same decimal string:
 
 ```json
 {
   "status": "committed",
-  "transaction": { "legs": [{ "account": "...", "amount": "CREDIT:10.00" }] }
+  "transaction": { "legs": [{ "account": "...", "amount": "CREDIT:600.00" }] }
 }
 ```
 
-A `rejected` outcome is not an error. When the economy declines a valid request for a business reason (say a `spend` the buyer can't cover) the response is still `200`, carrying the decline:
+A `rejected` outcome is not an error. Sometimes the economy declines a valid request for a business reason, say a `spend` the buyer can't cover. The response is still `200`, and it carries the decline:
 
 ```json
 {
@@ -83,34 +108,49 @@ A `rejected` outcome is not an error. When the economy declines a valid request 
   "detail": {
     "reason": "INSUFFICIENT_FUNDS",
     "account": "usr_buyer:spendable",
-    "need": "CREDIT:4.00",
-    "have": "CREDIT:0.00"
+    "need": "CREDIT:480.00",
+    "have": "CREDIT:120.00"
   }
 }
 ```
 
-The wire shape is `{ status, reason, detail }`: the top-level `reason` is a convenience copy derived from `detail.reason`, which is the rejection's sole TypeScript discriminant, and every money figure in `detail` travels as the same decimal string as any other wire amount.
+The wire shape is `{ status, reason, detail }`. The top-level `reason` is a convenience copy derived from `detail.reason`. `detail.reason` is the rejection's sole TypeScript discriminant. Every money figure in `detail` travels as the same decimal string as any other wire amount.
 
 In the status mapping below, a decline is a normal answer and a fault is an HTTP error.
 
 ### How thrown faults map to status codes
 
-When `submit` throws an <ApiLink to="classes/src.EconomyError" />, <SourceLink to="src/server.ts#L363">statusForError</SourceLink> maps it to a status code. The response carries the caller-safe problem fields (`title`, `code`, `retryable`) and never `detail`, `cause`, or stack — those stay server-side.
+When `submit` throws an <ApiLink to="classes/economy-lab.EconomyError" />, <SourceLink to="src/errors.ts#L475">statusForError</SourceLink> maps it to a status code. The response carries the caller-safe problem fields (`title`, `code`, `retryable`) and never `cause` or stack. Those stay server-side, and so does `detail` apart from a short per-code allowlist — one code uses it today, and the row below says which.
 
-The mapping is by the error's stable code:
+The mapping is by the error's stable code, and the retry verdict is read before the code, so one code that is raised both ways gets both answers:
 
 | Condition                                                                          | Status |
 | ---------------------------------------------------------------------------------- | ------ |
 | Missing permission (`UNAUTHORIZED`) or bad webhook signature (`INVALID_SIGNATURE`) | `401`  |
 | Caller's request was wrong: malformed operation, invalid amount, currency mismatch | `400`  |
 | Retryable fault, like a transient storage failure                                  | `503`  |
+| The target's own state refused a well-formed request (`SAGA.INVALID_TRANSITION`, `SESSION.SETTLED`) | `409`  |
+| The request reached a [cluster node](/economy/concepts/cluster/) that doesn't own the scope (`SESSION.MISROUTED`) | `421`  |
 | Anything else                                                                      | `500`  |
+
+A `421` is the one answer that names somewhere else to go, so it is also the one that carries a `detail` field on the wire: `owner`, the node the scope belongs to. Send the same body there. [RFC 9110 §15.5.20](https://www.rfc-editor.org/rfc/rfc9110#status.421) defines `421 Misdirected Request` as a request "directed at a server that is unable or unwilling to produce an authoritative response", which a client may retry elsewhere — a `409` would instead be telling the caller to re-send here, and here is the one place that will never accept it.
+
+A `409` is the one refusal a caller resolves without changing the request. Reversing a payout still inside its provider settlement window answers `409`; so does a movement against a [netting session](/economy/concepts/session-netting/) that already settled. Wait out the window, or rotate to a new session epoch, and re-send the same body. Treat it as an answer, not an outage: a retry loop that watches for `5xx` will not see it at all.
 
 An unexpected throw that isn't an `EconomyError` is normalized into a retryable storage fault, so it goes out as a `503` with a generic message. The internals never reach the client.
 
+## The catalog check
+
+A `spend` posted to `/submit` can be held to the host's live offer. With `Ports.catalog` wired, a
+disagreement with the offer's `sku`, `price`, or `recipients` answers `200` with a `rejected`
+outcome, reason `CATALOG_MISMATCH`, decided before the transaction opens. The check is the
+economy's, not the server's — `createServer` takes no catalog option — so `/submit` refuses the
+same spend every other door refuses. The [catalog port](/economy/ports/catalog/) page owns the
+contract, the wiring, and the check order.
+
 ## The instance purchase lane
 
-`POST /instances/:scope/purchase` is the transport an unprivileged game server calls to buy through the [instance economy](/economy/concepts/instance-economy/). It exists only when `ServerOptions.instances` carries the lane manager — an `InstanceEconomies` built over the same ports — and answers `404` otherwise. The route hands the decoded purchase to `laneFor(scope)` and returns the `PurchaseOutcome`; the money settles later, on the lane's own schedule.
+An unprivileged game server calls `POST /instances/:scope/purchase` to buy through the [instance economy](/economy/concepts/instance-economy/). The route exists only when `ServerOptions.instances` carries the lane manager, an `InstanceEconomies` built over the same ports. Without it, the route answers `404`. The route hands the decoded purchase to `laneFor(scope)` and returns the `PurchaseOutcome`. The money settles later, on the lane's own schedule.
 
 <CallTabs name="instance-purchase" http={instancePurchaseHttp}>
 
@@ -126,19 +166,19 @@ const outcome = await lanes.laneFor('wrld_1043').purchase({
 
 </CallTabs>
 
-The route shares `/submit`'s authentication posture, and a `user` principal may only purchase with their own wallet — a body naming someone else's `buyerId` is refused with `AUTH.UNAUTHORIZED` before the lane sees it.
+The route shares `/submit`'s authentication posture. A `user` principal may only purchase with their own wallet. The server refuses a body naming someone else's `buyerId` with `AUTH.UNAUTHORIZED` before the lane sees it. What makes the unprivileged call safe past that gate is the lane itself: the [instance economy's production screens](/economy/concepts/instance-economy/#the-production-screens) (the per-buyer cap and prefund escrow) bound what any one caller can move.
 
-There is deliberately no batch route: `Economy.submitBatch` and the [submit coalescer](/economy/reference/the-economy/#batches-and-bursts) are in-process surface. An HTTP edge that wants burst-coalescing wraps its own economy handle; the wire protocol stays one operation, one outcome.
+There is no batch route, by design. `Economy.submitBatch` and the [submit coalescer](/economy/reference/the-economy/#batches-and-bursts) are in-process surface. An HTTP edge that wants burst-coalescing wraps its own economy handle. The wire protocol stays one operation, one outcome.
 
 <Callout type="warning">
-The problem body carries `type`, `title` (the caller-safe message), `status`, and the stable `code`/`retryable` extensions — never `detail`, `cause`, or a stack. A test pins this: a fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message (`test/server.test.ts`). Rejection reasons never ride the error wire: they live in a `rejected` outcome, not a thrown fault.
+The problem body carries `type`, `title` (the caller-safe message), `status`, and the stable `code`/`retryable` extensions. It never carries `detail`, `cause`, or a stack. A test in `test/server.test.ts` pins this. A fault carrying SQL text and a connection string in its `detail`/`cause` still leaks only the one human-readable message. Rejection reasons never ride the error wire. They live in a `rejected` outcome, not a thrown fault.
 </Callout>
 
 ## Authenticating the submit path
 
-`ServerOptions.authenticate` is a required posture, not a default: <ApiLink to="functions/src_server.createServer" /> refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body, which is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so — otherwise any client can claim to be an operator.
+`ServerOptions.authenticate` is a required posture, not a default. <ApiLink to="functions/server.createServer" /> refuses to construct without it. Passing `authenticate: false` declares that the server trusts the `actor` object in the body. That trust is only safe when the handler runs in-process and every caller is your own code. The moment the handler sits on a network socket, the actor must come from a credential, not from the caller's say-so. Otherwise any client can claim to be an operator.
 
-For that, you supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/) — typically by checking a bearer token or session cookie — and <SourceLink to="src/server.ts#L251">submitRoute</SourceLink> runs it before it reads the body:
+For that, you supply a function from the raw `Request` to a [`Principal`](/economy/concepts/actors-and-authorization/), typically by checking a bearer token or session cookie. <SourceLink to="src/server.ts#L886">submitRoute</SourceLink> runs the function before it reads the body:
 
 ```ts
 const handler = createServer({
@@ -153,22 +193,22 @@ const handler = createServer({
 
 Three rules follow once the hook is configured:
 
-- The returned principal is stamped onto the operation as its `actor`. The body must omit `actor` entirely; a body that carries its own is rejected `400` rather than silently overridden, so a caller can never believe a claimed actor was honored.
+- The returned principal is stamped onto the operation as its `actor`. The body must omit `actor` entirely. A body that carries its own is rejected `400` rather than silently overridden, so a caller can never believe a claimed actor was honored.
 - Returning `null` refuses the request with a `401` problem response carrying the stable `UNAUTHORIZED` code.
 - The hook runs before the body is read, so an unauthenticated caller costs no buffering.
 
-Authorization — what the stamped principal may then do — is unchanged and stays inside the economy: a `user` principal still can't spend from someone else's wallet regardless of how it authenticated.
+Authorization decides what the stamped principal may then do. It is unchanged, and it stays inside the economy. A `user` principal still can't spend from someone else's wallet regardless of how it authenticated.
 
 ## Body limits and cross-origin calls
 
-Every body the server accepts — `/submit` and `/webhooks/:provider` alike — is read under two bounds, both settable in <ApiLink to="interfaces/src_server.ServerOptions" />:
+The server reads every body it accepts — `/submit` and `/webhooks/:provider` alike — under two bounds. Both are settable in <ApiLink to="interfaces/server.ServerOptions" />:
 
-- **A byte ceiling** (`maxBodyBytes`, default 64 KiB). A declared `content-length` past it is refused before any byte is read; a lying or absent declaration is caught while the chunks arrive. Past the ceiling the reply is a `413` problem. Every legitimate operation fits in a small fraction of the default.
-- **A read deadline** (`readTimeoutMs`, default 10 seconds). A body that trickles past the deadline is answered with a `408` problem, so a slow client cannot hold the handler open.
+- **A byte ceiling** (`maxBodyBytes`, default 64 KiB). The server refuses a declared `content-length` past it before any byte is read. It catches a lying or absent declaration while the chunks arrive. Past the ceiling the reply is a `413` problem. Every legitimate operation fits in a small fraction of the default.
+- **A read deadline** (`readTimeoutMs`, default 10 seconds). A body that trickles past the deadline is answered with a `408` problem — a slow client cannot hold the handler open.
 
-The bounded read lives at <SourceLink to="src/server.ts#L628">readBounded</SourceLink>. The Node bridge in `scripts/main.ts` buffers the body before the Fetch handler ever sees it, so the bridge itself enforces the same two limits while the bytes stream in.
+The bounded read lives at <SourceLink to="src/server.ts#L1470">readBounded</SourceLink>. The Node bridge hands the socket through as the request body rather than buffering it first, so both bounds are enforced in the one place that owns them.
 
-Cross-origin resource sharing (CORS) — the browser mechanism that decides whether a page on another origin may call this service — stays off unless you list origins:
+Cross-origin resource sharing (CORS) is the browser mechanism that decides whether a page on another origin may call this service. It stays off unless you list origins:
 
 ```ts
 const handler = createServer({
@@ -179,11 +219,11 @@ const handler = createServer({
 });
 ```
 
-Origins match exactly. With the option absent the server sets no CORS headers at all, and with it present an unlisted origin gets none either — the deny is the absence of a grant. A denied preflight is a bare `204` that leaks nothing about the allowlist (<SourceLink to="src/server.ts#L210">preflightResponse</SourceLink>).
+Origins match exactly. With the option absent, the server sets no CORS headers at all. With it present, an unlisted origin gets none either. The deny is the absence of a grant. A denied preflight is a bare `204` that leaks nothing about the allowlist (<SourceLink to="src/server.ts#L845">preflightResponse</SourceLink>).
 
 ## Rate limiting the submit path
 
-`/submit` takes admission control through the <ApiLink to="interfaces/src_ports.RateLimiter" /> port: one `allow` call per request, keyed by caller, answering a verdict. The limit and window are the adapter's policy, so the server never sees the numbers:
+`/submit` takes admission control through the <ApiLink to="interfaces/ports.RateLimiter" /> port. The server makes one `allow` call per request, keyed by caller, and receives a verdict. The limit and window are the adapter's policy, so the server never sees the numbers:
 
 ```ts
 import { createServer } from '@pwngh/economy-lab';
@@ -197,33 +237,57 @@ const handler = createServer({
 });
 ```
 
-A denial answers `429`, with a `retry-after` header when the limiter knows how long the window has left. The default key is the authenticated principal (`user:usr_42`, `system:checkout`); without an `authenticate` hook it falls back to the client address the Node bridge reads from the socket and stamps into the `x-economy-client-ip` header, overwriting anything inbound so a caller can't spoof it. Hosts on other runtimes supply `rateLimit.keyFor`.
+A denial answers `429`, with a `retry-after` header when the limiter knows how long the window has left. The default key is the authenticated principal (`user:usr_42`, `system:checkout`). Without an `authenticate` hook, the key falls back to the client address. The Node bridge reads that address from the socket and stamps it into the `x-economy-client-ip` header, overwriting anything inbound — so the value there is always the address the bridge measured, never one a caller sent.
 
-Two adapters ship: `memoryRateLimiter` (on the `adapters` subpath) counts fixed windows in-process, and `redisRateLimiter` (on the `adapters/redis` subpath) does the same over Redis so several instances share one budget. A throwing limiter fails open — a down limiter backend should degrade protection, not availability — and each such failure counts `economy.ratelimit.degraded` on the wired meter.
+### Behind a load balancer, the default pools
+
+The address the bridge measures is the **peer**, and behind a load balancer or a content delivery network the peer is that front door on every request. The default key is then one bucket for everyone behind it, and a single caller can exhaust the limit for all of them. A deployment where nothing stamps an address at all keys every caller as `ip:unknown` and does the same.
+
+The service will not read a forwarded address for you. Which header your front door sets, and how many hops in front of it you trust, is knowledge you have and it does not — and a header any caller can write is not an identity on its own. What it does is stop being quiet about it: both cases count `economy.ratelimit.pooled` on the wired meter, tagged `forwarded` when a hop rewrote the peer and `unstamped` when nothing measured one.
+
+Answer it with `rateLimit.keyFor`, which replaces the key outright. Read the address your own front door is trusted to report, and compose `principalKey` for the authenticated half rather than re-deriving it:
+
+```ts
+const rateLimit = {
+  limiter,
+  keyFor: (request: Request, principal?: Principal) =>
+    principal === undefined
+      ? `ip:${myTrustedClientAddress(request)}`
+      : principalKey(principal),
+};
+```
+
+Keying on `principal.kind` instead of `principalKey` looks equivalent and is not: it puts every authenticated user in a single `user` bucket.
+
+Two adapters ship. `memoryRateLimiter` (on the `adapters` subpath) counts fixed windows in-process. `redisRateLimiter` (in `@pwngh/economy-redis`) does the same over Redis, so several instances share one budget. Both run through `runRateLimiterConformance` on the [testing](/economy/reference/api/) subpath, so the two answer alike: a key spends its own budget, a zero limit allows nothing, and a denial's `retryAfterMs` is a wait that genuinely elapses. Both also refuse a window of zero or less at construction, through the shared `assertRatePolicy` — a zero window arms no expiry, and a limiter that allows everything reports no denials to say so.
+
+A throwing limiter fails open, because a down limiter backend should degrade protection, not availability. Each such failure counts `economy.ratelimit.degraded` on the wired meter.
 
 ## Correlating a request end to end
 
-Every `/submit` reply carries an `x-request-id` header, problem responses included. The server picks the id in a fixed order: the trace id of a W3C `traceparent` header wins, so a caller already running distributed tracing gets one id across both systems; an explicit `x-request-id` header is next; otherwise the server mints one (`req_…`).
+Every `/submit` reply carries an `x-request-id` header, problem responses included. The server picks the id in a fixed order. The trace id of a W3C `traceparent` header wins, so a caller already running distributed tracing gets one id across both systems. An explicit `x-request-id` header is next. Otherwise the server mints one (`req_…`).
 
-The id doesn't stop at the response. Submit stamps it onto the outbound event envelope, and because the envelope is persisted in the [outbox](/economy/ports/messaging/), the id survives into the relay worker running in another process — its delivery-failure and dead-letter logs name the originating request. One id, quoted from any error report, follows a money movement from the HTTP edge to its event leaving the building.
+The id doesn't stop at the response. Submit stamps it onto the outbound event envelope. The envelope is persisted in the [outbox](/economy/ports/messaging/), so the id survives into the relay worker running in another process. The worker's delivery-failure and dead-letter logs name the originating request. One id, quoted from any error report, follows a money movement from the HTTP edge to its event leaving the building.
 
-Two boundaries on purpose: worker-born events (payout reversals, subscription renewals) carry a null id because no request caused them, and the health probes carry no id at all — there is nothing to trace.
+Two boundaries exist on purpose. Worker-born events (payout reversals, subscription renewals) carry a null id, because no request caused them. The health probes carry no id at all, because there is nothing to trace.
 
 ## Receiving provider webhooks
 
-The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled or failed, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`); it comes from the route, not the body, so it can't be spoofed.
+The other money-moving path is inbound. A payment provider calls `POST /webhooks/:provider` to report a real-world event: a user's purchase cleared, a payout settled or failed, a charge was disputed. The `:provider` segment names who's calling (`steam`, `billing`). Because it comes from the route rather than the body, it can't be spoofed.
 
-The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L42">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation: a cleared purchase maps to a `topUp`, a settled payout to a <ApiLink to="variables/src.settlePayout" />, a failed payout to a <ApiLink to="variables/src.reversePayout" />, a dispute to a <ApiLink to="variables/src.clawback" />. Those mappers (`toTopUp`, `toSettlePayout`, `toReversePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch. The economy-edge bridge injects exactly such a handler for the Tilia rail's callbacks ([the packages](/economy/ports/packages/)).
+The server doesn't apply these itself. It verifies the callback, then hands the trusted bytes to a `WebhookHandler` you inject through <SourceLink to="src/server.ts#L109">ServerOptions</SourceLink>. With no handler wired, the path answers `404`. The handler is where the callback becomes a ledger operation. A cleared purchase maps to a `topUp`. A settled payout maps to a <ApiLink to="variables/economy-lab.settlePayout" />, a failed payout to a <ApiLink to="variables/economy-lab.reversePayout" />, and a dispute to a <ApiLink to="variables/economy-lab.clawback" />. Those mappers (`toTopUp`, `toSettlePayout`, `toReversePayout`, `toClawback`) and the event shapes they consume belong to the [processor port](/economy/ports/processor/), so see that page for the dispatch. The economy-edge bridge injects exactly such a handler for the Tilia rail's callbacks ([the packages](/economy/ports/packages/)).
 
 ### The verification gate
 
 When `ports.secrets` carries a webhook secret, the server gates every callback before the handler runs. A forged request never reaches code that changes balances. The checks run in order:
 
-1. **Signature.** The hex `x-signature` header must be an HMAC-SHA256 of the raw body, keyed with the configured secret. A mismatch is `401 INVALID_SIGNATURE` and nothing downstream runs. The check uses `crypto.subtle.verify`, which compares in constant time.
-2. **Freshness.** The `x-timestamp` header must be finite and within `ports.config.replayWindowMs` of `ports.clock`. A stale or missing timestamp is answered `200` with `{ "status": "duplicate" }`, not a `5xx` that would invite a retry storm.
-3. **Replay.** When you also wire a `ReplayStore`, the server claims the provider's `eventId` last, after signature and freshness. A repeat `eventId` is answered `200` and the handler never runs, so its work happens once. Claiming last means a forged or stale delivery can never burn a real `eventId` and block a later genuine one.
+1. **Bounds.** The body is read under a byte ceiling and a read deadline before anything else looks at it. An oversized body is `413`, a slow one `408`. The bounds run first because every check after them costs memory or time an unauthenticated caller would otherwise be choosing.
+2. **Signature.** The hex `x-signature` header must be an HMAC-SHA256 (a keyed-hash message authentication code over SHA-256) of the raw body, keyed with the configured secret. A mismatch is `401 INVALID_SIGNATURE` and nothing downstream runs. The check uses `crypto.subtle.verify`, which compares in constant time.
+3. **Freshness.** The `x-timestamp` header must be finite and within `ports.config.freshnessWindowMs` of `ports.clock`. A stale or missing timestamp is answered `200` with `{ "status": "duplicate" }`, not a `5xx` that would invite a retry storm. The window bounds clock skew and nothing more: the signature covers the body, not this header, so a captured delivery re-dated to now passes this check. Step 5 is the replay defence.
+4. **Decode.** The provider's decoder reads the `eventId` out of the verified bytes. A body that cleared the signature but is not valid JSON is a malformed callback, answered `400`. No decoder runs until the signature and the window have settled, so provider code never sees a body that failed to prove itself.
+5. **Replay.** When you also wire a `ReplayStore`, the server claims that `eventId` last. A repeat is answered `200` and the handler never runs, so its work happens once. Claiming last means a forged or stale delivery can never burn a real `eventId` and block a later genuine one.
 
-This is the request-path half of [idempotency](/economy/concepts/idempotency/): the replay store drops most redeliveries here, at the edge, before they reach the handler.
+This is the request-path half of [idempotency](/economy/concepts/idempotency/). The replay store drops most redeliveries here, at the edge, before they reach the handler.
 
 <Callout type="note">
   The raw body is read exactly once. Verification, the replay decode, and the
@@ -232,42 +296,64 @@ This is the request-path half of [idempotency](/economy/concepts/idempotency/): 
   for signing.
 </Callout>
 
-When no secret is configured, the webhook path is a bare pass-through: the server forwards straight to the handler and the host owns verification. The wiring below fails to start without a secret.
+When no secret is configured, the webhook path is a bare pass-through. The server forwards straight to the handler, and the host owns verification. The wiring below fails to start without a secret.
 
 ## Health and readiness
 
 The two `GET` probes are for your orchestrator, and they answer different questions.
 
-`GET /healthz` is liveness: the process is up and can serve a response. It does no I/O, so it answers even when a downstream dependency is down. The `Dockerfile` health check targets this path.
+`GET /healthz` is liveness. It reports that the process is up and can serve a response. It does no I/O, so it answers even when a downstream dependency is down. The `Dockerfile` health check targets this path.
 
 ```json
 { "status": "ok" }
 ```
 
-`GET /readyz` is readiness: a dependency is reachable, so the orchestrator can route traffic here. It does one cheap store-touching read through the economy: the balance of a known `SYSTEM` account. Any throw means the store is unreachable, reported as `503` with no detail:
+`GET /readyz` is readiness. It reports that a dependency is reachable, so the orchestrator can route traffic here. It does one cheap store-touching read through the economy: the balance of a known `SYSTEM` account. Any throw means the store is unreachable. The server reports that as `503` with no detail:
 
 ```json
 { "status": "ready" }     // 200, store reachable
 { "status": "unavailable" } // 503, store read threw
 ```
 
-The probe goes through the economy's public read surface, not the ledger directly, since `createServer` only ever receives the `Economy` and the narrow ports pick, so it can't reach past that boundary.
+The probe goes through the economy's public read surface, not the ledger directly. `createServer` only ever receives the `Economy` and the narrow ports pick, so the probe can't reach past that boundary.
 
 ## Wiring it onto a runtime
 
-`createServer` is runtime-agnostic on purpose, which means something has to mount it on a real listener. That's `scripts/main.ts`: the app entry point, and the one place environment variables are read.
+`createServer` is runtime-agnostic, so something has to mount it on a real listener. The `economy`
+bin does that, over an `economy.app.ts` module. This repository runs its own economy the same way:
+`economy/app.ts` is the module, and the Docker image runs `economy serve` over it.
 
-It runs in three modes, selected by `argv[2]`:
+The bin's three running verbs:
 
-| Mode     | What it starts                                                                                    |
+| Verb     | What it starts                                                                                    |
 | -------- | ------------------------------------------------------------------------------------------------- |
-| `serve`  | The HTTP API on `$PORT` (default `3000`); store, cache, and dispatcher come from the environment. |
-| `dev`    | The same API, forced to in-memory adapters with dev secrets, no infrastructure, for `make dev`.   |
-| `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.        |
+| `serve`  | The HTTP API on `$PORT` (default `3000`); store, cache, and dispatcher come from the environment, and every dev stand-in refuses before the bind. |
+| `dev`    | The same API on loopback, with the in-memory posture and dev tokens, no infrastructure.            |
+| `worker` | The [background worker](/economy/reference/background-worker/) loop, not the HTTP service.         |
 
-In `serve` and `dev`, <SourceLink to="scripts/main.ts#L322">runServe</SourceLink> builds the economy from the environment and mounts the handler. It passes the purchase-webhook handler and the `ports` bag into `createServer`. The bag's `secrets` and `config` are what _activate_ the verification gate, so a genuine callback is persisted and a forged or stale one is rejected before it changes anything.
+`createApp` builds the economy from the environment and mounts the handler. The `ports` bag it
+opens carries the `secrets` and `config` that _activate_ the verification gate, so a genuine
+callback is persisted and a forged or stale one is rejected before it changes anything.
 
-The handler itself is yours to write, and its body is two calls exported from the `server` subpath. `decodeWebhookEvent` turns the parsed JSON body into a typed `PurchaseEvent`; a wrong-shape body or bad amount throws a fault the service maps to a `400` problem response before anything reaches the ledger. `handlePurchaseWebhook` persists the decoded event to the inbox, deduplicated on the provider's event id, for the apply worker to settle off the request path:
+The module names the providers it accepts, one decoder per provider, and presence of that export is
+what mounts `POST /webhooks/:provider`. A verified event lands in the inbox and the apply worker
+settles it off the request path:
+
+```ts
+// economy.app.ts
+import { decodeWebhookEvent } from '@pwngh/economy-lab/server';
+
+export const providers = {
+  billing: (raw: unknown) => decodeWebhookEvent('billing', raw),
+};
+```
+
+Hosting `createServer` yourself is the other way. Its `webhook` option takes one handler for every
+provider, and the body is two calls exported from the `server` subpath. `decodeWebhookEvent` turns
+the parsed JSON body into a typed `PurchaseEvent`. A wrong-shape body or bad amount throws a fault,
+and the service maps that fault to a `400` problem response before anything reaches the ledger.
+`handlePurchaseWebhook` persists the decoded event to the inbox, deduplicated on the provider's
+event id:
 
 ```ts
 import { createServer } from '@pwngh/economy-lab';
@@ -285,18 +371,21 @@ const handler = createServer({
 });
 ```
 
-On Bun and Deno, the Fetch handler is served directly. On Node, the entry bridges `node:http` requests into web `Request`/`Response` objects so the same Fetch-only handler runs unchanged. This translation lives in `scripts/`, and the rest of `src/` stays runtime-agnostic.
+On Bun and Deno, the Fetch handler is served directly. On Node it goes through the lab's own
+<ApiLink to="functions/adapters.serveNode" />, which converts `node:http` requests into web
+`Request`/`Response` objects so the same Fetch-only handler runs unchanged. That conversion lives
+in `src/adapters/`, and the rest of `src/` stays runtime-agnostic.
 
 <Callout type="warning">
-  The deployed process fails fast on missing secrets. `requireSecrets` rejects
-  an unset or blank `SIGNING_SECRET` or `WEBHOOK_SECRET` at startup, naming each
-  one, so an unset `WEBHOOK_SECRET` can't quietly leave inbound callbacks
-  unverified. The full set of environment variables lives on
+  `economy serve` runs preflight before it binds and refuses on a blank
+  `SIGNING_SECRET` or `WEBHOOK_SECRET`, naming each one. So an unset
+  `WEBHOOK_SECRET` can't quietly leave inbound callbacks unverified. The full
+  set of environment variables lives on
   [configuration](/economy/reference/configuration/).
 </Callout>
 
 ## What's stubbed versus production-grade
 
-The HTTP edge (the routing, the wire codec, the webhook gate, the status mapping) is what the tests exercise: `test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes.
+The tests exercise the HTTP edge: the routing, the wire codec, the webhook gate, and the status mapping. `test/server.test.ts` covers `/submit`, the HMAC and freshness checks, the leak-proof error body, and both probes.
 
-The bridge in `scripts/main.ts` is dev plumbing, not a hardened gateway. It reads the whole request body into memory before handing it over — capped at the same byte ceiling and read deadline the server enforces — and wires no rate limiter by default. The Node path is a minimal `node:http` translation. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS and connection limits.
+The bin is not a hardened gateway. It wires no rate limiter by default. Its Node listener is the library's own <ApiLink to="functions/adapters.serveNode" />, which streams the body through and leaves the byte ceiling and read deadline to `createServer`; the Bun and Deno paths hand the handler straight to `Bun.serve` and `Deno.serve`. In a real deployment you'd typically sit this behind a reverse proxy that owns TLS and connection limits.

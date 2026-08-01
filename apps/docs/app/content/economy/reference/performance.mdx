@@ -5,15 +5,15 @@ order: 45
 status: stable
 sourceRefs:
   [
-    'scripts/support/harness.ts#L181 · buildBenchConfig',
-    'scripts/support/harness.ts#L736 · curveSizes',
-    'src/chain.ts#L134 · proveChain',
+    'test/support/harness.ts#L181 · buildBenchConfig',
+    'test/support/harness.ts#L137 · curveSizes',
+    'src/chain.ts#L127 · proveChain',
     'src/worker/checkpoint.ts#L49 · sealCheckpoint',
   ]
 related: ['economy/reference/configuration', 'economy/reference/reads']
 ---
 
-economy-lab ships a benchmark so its cost is measured, not asserted. It runs through the same composition root as the real service and reports two things: how fast operations commit on each storage backend, and how the integrity checks grow as history piles up. Run it with one command:
+economy-lab ships a benchmark so its cost is measured, not asserted. The benchmark runs through the same composition root as the real service. It reports two things: how fast operations commit on each storage backend, and how the cost of the integrity checks grows as history piles up. Run it with one command:
 
 ```bash
 make bench   # in-memory, plus any Postgres/MySQL that's reachable
@@ -23,26 +23,26 @@ make bench   # in-memory, plus any Postgres/MySQL that's reachable
 
 The bench prints five tables.
 
-- **Submit throughput** — `submit()` rate for <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.spend" />, and <ApiLink to="variables/src.requestPayout" />, per backend (in-memory, plus Postgres and MySQL when they're up), measured both sequentially (one op at a time, latency-bound) and concurrently (up to `BENCH_CONCURRENCY` in flight — the throughput the engine sustains). This is the engine cost of the double-entry and hash-chain work per operation.
-- **Instance netting** — the opt-in netting path: accept many small balanced movements into an in-instance journal, then settle the net to the ledger in one posting. Measures the accept rate and the settle cost.
-- **Entitlement bitset** — the same `owns()` ownership check answered by a store round-trip versus a warm in-process bitmap.
+- **Submit throughput** — the `submit()` rate for <ApiLink to="variables/economy-lab.topUp" />, <ApiLink to="variables/economy-lab.spend" />, and <ApiLink to="variables/economy-lab.requestPayout" />, per backend (in-memory, plus Postgres and MySQL when they're up). The bench measures it two ways: sequentially (one op at a time, latency-bound) and concurrently (up to `BENCH_CONCURRENCY` in flight, which is the throughput the engine sustains). This table shows the engine cost of the double-entry and hash-chain work per operation.
+- **Instance netting** — the opt-in netting path. The path accepts many small balanced movements into an in-instance journal, then settles the net to the ledger in one posting. The bench measures the accept rate and the settle cost.
+- **Entitlement bitset** — the same `owns()` ownership check answered two ways: by a store round-trip, and by a warm in-process bitmap.
 - **Integrity cost versus ledger size** — for a growing number of postings, the time to [prove](/economy/concepts/the-proof/) the ledger, to seal a [checkpoint](/economy/concepts/integrity/), and to verify the latest checkpoint.
-- **Balance re-derivation** — re-deriving one account's balance by folding its leg column, in-memory, at a range of leg counts: the WASM fold against the scalar loop it replaces.
+- **Balance re-derivation** — the time to re-derive one account's balance by folding its leg column, in-memory, at a range of leg counts. This table compares the WASM (WebAssembly) fold against the scalar loop it replaces.
 
 ## How to read the numbers
 
-These are **lab numbers**, and the bench says so in its own header. It runs in a single process and, by default, neutralizes the policy gates (`BENCH_GATES=off`) — maturity horizon, [velocity](/economy/concepts/spend-velocity/) limit, and the payout interval are all turned off so the timings reflect ledger work, not rejections. The sequential number is not the engine's ceiling; the concurrent sample is the throughput signal.
+These are **lab numbers**. The bench runs in a single process and, by default, neutralizes the policy gates (`BENCH_GATES=off`). The maturity horizon, the [velocity](/economy/concepts/spend-velocity/) limit, and the payout interval are all turned off, so the timings reflect ledger work, not rejections. The sequential number is not the engine's ceiling. The concurrent sample is the throughput signal.
 
 <Callout type="warning">
   Read these as *relative cost and scaling shape*, not as a capacity figure. A
   single sequential process on one machine doesn't tell you production
-  throughput; it tells you how the backends compare and how the curves bend as
+  throughput. It tells you how the backends compare and how the curves bend as
   the ledger grows.
 </Callout>
 
 ## A measured run
 
-One run, gates off, in a single process, with a local Postgres and MySQL. Read the shape, not the absolute figures — your machine and setup will land somewhere else. [The scaling shape](#the-scaling-shape) below is why the backends differ this much.
+These tables show one run: gates off, in a single process, with a local Postgres and MySQL. Read the shape, not the absolute figures, because your machine and setup will land somewhere else. [The scaling shape](#the-scaling-shape) below explains why the backends differ this much.
 
 Submit throughput, sequential (ops/sec, one op at a time):
 
@@ -60,7 +60,7 @@ Submit throughput, concurrent (ops/sec, up to 32 in flight):
 | Postgres  | 260    | 239    | 268           |
 | MySQL     | 155    | 123    | 121           |
 
-In memory, `submit` is CPU-bound and runs tens of thousands per second; the store is one writer, so in-flight submits queue rather than interleave and its concurrent rate stays close to sequential. On a SQL backend each `submit` is its own transaction, with a commit and an `fsync` per operation, so the rate drops to hundreds per second — and concurrency, pipelining independent transactions, is what recovers it.
+In memory, `submit` is CPU-bound and runs tens of thousands per second. The store is one writer, so in-flight submits queue rather than interleave, and the concurrent rate stays close to sequential. On a SQL backend each `submit` is its own transaction, with a commit and an `fsync` per operation, so the rate drops to hundreds per second. Concurrency recovers some of that rate, because it pipelines independent transactions.
 
 Integrity cost versus ledger size (in-memory, ms):
 
@@ -71,25 +71,25 @@ Integrity cost versus ledger size (in-memory, ms):
 | 4,000    | 2.28  | 49.5  | 0.38   |
 | 8,000    | 4.60  | 100.0 | 0.84   |
 
-`prove` and `seal` re-walk every posting from genesis, so both climb with history; `verify` stays low and roughly flat.
+`prove` and `seal` re-walk every posting from genesis, so both climb with history. `verify` stays low and roughly flat.
 
 ## The scaling shape
 
 Submit cost is per operation:
 
-- **In memory** — the cost of building and hashing one balanced posting.
-- **On a SQL backend** — each `submit` is its own transaction, so it also pays a commit and an `fsync`, which dominates the per-operation time.
+- **In memory** — each `submit` pays the cost of building and hashing one balanced posting.
+- **On a SQL backend** — each `submit` is its own transaction, so it also pays a commit and an `fsync`. That commit-and-`fsync` cost dominates the per-operation time.
 
 Integrity cost splits by what each check has to read:
 
 - **`prove` and a checkpoint seal re-walk every posting from genesis.** Both re-derive the hash chain from the start, so their cost is O(postings) and climbs as history grows.
 - **Checkpoint verify reads only account heads.** It recomputes the signed root over current heads, so its cost is O(accounts) and stays roughly flat as postings accumulate.
 
-Verifying a checkpoint in O(accounts) anchors ongoing integrity where a full re-prove — O(postings) — can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule.
+Checkpoint verify runs in O(accounts) and anchors ongoing integrity. A full re-prove runs in O(postings) and can't keep up once the ledger has years of history. The [background worker](/economy/reference/background-worker/) seals checkpoints on a schedule.
 
 ## The optimizations
 
-The numbers above are the general path. Each backend is slow for a different reason — in memory the per-operation fold and hash, on a SQL backend the transaction and the round-trip — so a different optimization pays off on each. Each one removes whichever cost dominates that engine.
+The numbers above are the general path. Each backend is slow for a different reason. In memory the cost is the per-operation fold and hash. On a SQL backend the cost is the transaction and the round-trip. So a different optimization pays off on each backend, and each optimization removes whichever cost dominates that engine.
 
 | Optimization       | in-memory | Postgres | MySQL  | What it removes                                |
 | ------------------ | --------- | -------- | ------ | ---------------------------------------------- |
@@ -98,11 +98,11 @@ The numbers above are the general path. Each backend is slow for a different rea
 | Fold-pushdown      | —         | 3.4×     | 2.0×   | shipping every leg to Node to derive a balance |
 | Columnar fold      | 3–4×      | —        | —      | boxed-`bigint` summation on the derive path    |
 
-The three SQL wins are largest exactly where a single operation costs the most: netting and the bitset are worth hundreds of times more on MySQL than in memory, because that is where the transaction and the round-trip are dear. In memory there is no transaction to remove, so the fold itself becomes the target.
+The three SQL wins are largest exactly where a single operation costs the most. Netting and the bitset are worth hundreds of times more on MySQL than in memory, because on MySQL the transaction and the round-trip are dear. In memory there is no transaction to remove, so the fold itself becomes the target.
 
 ### Instance netting
 
-Many small balanced movements — tips, unlocks, creator rewards — are accepted into an in-instance journal and settled to the ledger as one net posting, instead of one `submit` each. [Session netting](/economy/concepts/session-netting/) owns the mechanism; [the instance economy](/economy/concepts/instance-economy/) is the product lane built on it.
+The journal accepts many small balanced movements — tips, unlocks, creator rewards — and settles them to the ledger as one net posting, instead of one `submit` each. [Session netting](/economy/concepts/session-netting/) owns the mechanism. [The instance economy](/economy/concepts/instance-economy/) is the product lane built on it.
 
 | Backend   | movements/sec | ms/movement | settle             |
 | --------- | ------------- | ----------- | ------------------ |
@@ -110,11 +110,11 @@ Many small balanced movements — tips, unlocks, creator rewards — are accepte
 | Postgres  | 45,070        | 0.02        | 1 posting, 12.5 ms |
 | MySQL     | 20,038        | 0.05        | 1 posting, 24.3 ms |
 
-Accepting a movement never opens a database transaction, so on MySQL it runs about 270× the rate of an individual `spend`, and the whole batch commits as a single posting.
+Accepting a movement never opens a database transaction. On MySQL, accepts therefore run at about 270× the rate of an individual `spend`. The whole batch commits as a single posting.
 
 ### Entitlement bitset
 
-An ownership check — `owns(user, sku)` — answered from a warm in-process bitmap instead of a store round-trip.
+The bitset answers an ownership check — `owns(user, sku)` — from a warm in-process bitmap instead of a store round-trip.
 
 | Backend   | store `owns()` | warm bitmap | speedup |
 | --------- | -------------- | ----------- | ------- |
@@ -122,15 +122,15 @@ An ownership check — `owns(user, sku)` — answered from a warm in-process bit
 | Postgres  | 118.3 µs       | 125 ns      | 949×    |
 | MySQL     | 549.2 µs       | 125 ns      | 4,268×  |
 
-The bitmap cost is constant at about 120 ns; the speedup is the round-trip it replaces, which is why it grows from 6× in memory to thousands of times on a SQL backend.
+The bitmap cost is constant at about 120 ns. The speedup is the round-trip the bitmap replaces. That is why the speedup grows from 6× in memory to thousands of times on a SQL backend.
 
 ### Fold-pushdown
 
-Deriving a balance means summing an account's legs. On a SQL backend that sum runs inside the database behind a covering index (`legs_account_idx`) rather than shipping every leg to Node — measured at 3.4× on Postgres and 2.0× on MySQL when the index landed. In memory there is no database to push into, so this one is SQL-only.
+Deriving a balance means summing an account's legs. On a SQL backend that sum runs inside the database behind a covering index (`legs_account_idx`) rather than shipping every leg to Node. The pushdown measures 3.4× on Postgres and 2.0× on MySQL over shipping the legs to Node. In memory there is no database to push into; this one is SQL-only.
 
 ### Columnar fold
 
-In memory each account's legs are held as a resident `i64` column, one per currency, so re-deriving a balance folds native `i64` through [`@pwngh/money`](/economy/ports/packages/)'s WASM fold instead of a boxed-`bigint` loop over object legs. The fold changes only how the column is summed: the total is byte-identical to the scalar loop and to the SQL engines' `SUM`, which the cross-engine fuzz confirms.
+In memory, the store holds each account's legs as a resident `i64` column, one per currency. Re-deriving a balance therefore folds native `i64` through the WebAssembly module in `src/fold.ts` instead of a boxed-`bigint` loop over object legs. The fold changes only how the column is summed. The total is byte-identical to the scalar loop and to the SQL engines' `SUM`, which the cross-engine fuzz confirms.
 
 | Account legs | scalar | fold    | speedup |
 | ------------ | ------ | ------- | ------- |
@@ -139,45 +139,36 @@ In memory each account's legs are held as a resident `i64` column, one per curre
 | 100,000      | 295 µs | 68 µs   | 4.3×    |
 | 1,000,000    | 2.9 ms | 0.71 ms | 4.2×    |
 
-The fold copies the column into WebAssembly before summing, so it only pays off past a few hundred legs. An ordinary wallet holds too few legs to reach it and stays on the scalar loop; the win lands on the hot platform accounts, which take a leg per operation and grow without bound. This is the in-memory lever precisely because there's no transaction cost to remove: the fold is what's left.
+The fold copies the column into WebAssembly before summing, so it only pays off past a few hundred legs. An ordinary wallet holds too few legs to reach that point and stays on the scalar loop. The win lands on the hot platform accounts, which take a leg per operation and grow without bound. This is the in-memory lever precisely because there is no transaction cost to remove. The fold is what's left.
 
-### Set reconciliation (planned)
+### Set reconciliation
 
-A different axis: confirming two copies of the ledger hold the same set of entries. The lab does this today only across the processor seam — the settlement report is pulled and joined by key (`reconcile()`), which is the right tool when the far side sends a report.
-
-The forward-looking case is a second copy the lab controls — a read replica, a rebuilt shard, a backup. Both sides sketch their entry-id set into a small table, exchange the sketch, and recover exactly which ids differ. The cost tracks the disagreement, not the ledger size. Unlike every other table on this page, these figures are not `make bench` output: they were measured on a standalone prototype of the sketch, an [invertible Bloom lookup table](https://arxiv.org/abs/1101.2245), outside the lab:
-
-| ledger size | drift | reconcile |
-| ----------- | ----- | --------- |
-| 1,000       | 10    | ~150 µs   |
-| 100,000     | 10    | ~130 µs   |
-
-A 100,000-entry ledger reconciles as cheaply as a 1,000-entry one, over a ~1.3 KB sketch instead of the full id list — about 600× less wire. It waits on a second-copy seam to exist; until then the ledger has nothing to reconcile against this way.
+Confirming that two copies of the ledger hold the same set of entries is a different axis. The lab does this across the processor seam only. There, `reconcile()` pulls the settlement report and joins it by key, which is the right tool when the far side sends a report.
 
 ## The production path
 
-This project demonstrates the most obvious way to prove integrity: re-derive the entire chain on every run — O(postings). At real scale, a production ledger would make the seal incremental, exchanging the replay for a small proof.
+This project demonstrates the most obvious way to prove integrity: re-derive the entire chain on every run, which is O(postings). At real scale, a production ledger would make the seal incremental and exchange the replay for a small proof.
 
 That proof rests on an append-only Merkle log over postings ([RFC 6962](https://datatracker.ietf.org/doc/rfc6962/)). Each new posting folds into the tree in O(log n), and the signed root becomes the checkpoint.
 
 Two proofs then stand in for the replay, each O(log n) instead of O(postings):
 
 - **Inclusion** — a specific posting sits under a given root.
-- **Consistency** — a new signed root extends an old one: the earlier history is an unaltered prefix, with nothing rewritten or dropped.
+- **Consistency** — a new signed root extends an old one. The earlier history is an unaltered prefix, with nothing rewritten or dropped.
 
 So "was the ledger tampered with?" becomes a check anyone can run against two checkpoints, not a full re-derivation you have to trust the server to perform.
 
-Almost everything carries over; only the seal's full replay changes. The per-account [hash chains](/economy/concepts/integrity/) and the signed Merkle root over account heads are already how production ledgers commit to current state — Diem's Jellyfish Merkle tree, Ethereum's state trie.
+Almost everything carries over. Only the seal's full replay changes. The per-account [hash chains](/economy/concepts/integrity/) and the signed Merkle root over account heads are already how production ledgers commit to current state — Diem's Jellyfish Merkle tree, Ethereum's state trie.
 
-The lab keeps the full replay on purpose. An incremental tree has to be maintained and persisted in the same transaction as every posting: a new write-path invariant. Miss one tree update and the signed root no longer matches the postings. It trades seal throughput for an integrity check a reader can follow line by line.
+The lab keeps the full replay on purpose. An incremental tree has to be maintained and persisted in the same transaction as every posting, which adds a new write-path invariant. Miss one tree update and the signed root no longer matches the postings. The full replay trades seal throughput for an integrity check a reader can follow line by line.
 
-If seal cost ever bit at real scale, the order matters: schedule a standalone full [`prove`](/economy/concepts/the-proof/) first, then make the seal incremental; otherwise removing the replay also removes the periodic deep audit.
+If seal cost ever bit at real scale, the order matters. Schedule a standalone full [`prove`](/economy/concepts/the-proof/) first, then make the seal incremental. Otherwise removing the replay also removes the periodic deep audit.
 
-One thing the proofs can't cover alone: they catch tampering relative to the checkpoints a server issued, but not a server that shows different histories to different readers. Production closes that with witnessing: independent parties co-sign or cross-check checkpoints, so a reader doesn't have to take the operator's word for the history.
+There is one thing the proofs can't cover alone. They catch tampering relative to the checkpoints a server issued, but not a server that shows different histories to different readers. Production closes that gap with witnessing: independent parties co-sign or cross-check checkpoints, so a reader doesn't have to take the operator's word for the history.
 
 ## Running it against a backend
 
-In-memory runs with no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up; the bench picks its targets from `BENCH_POSTGRES_URL` / `BENCH_MYSQL_URL` (falling back to `DATABASE_URL` / `MYSQL_TEST_URL`) and skips any backend it can't reach. `make bench-prod` runs the same bench inside a Linux container against the compose databases, so commits pay a production-parity fsync. A heavier sample raises the op count:
+In-memory runs with no setup. For the SQL rows, apply the schema first (`make db-migrate`) and bring the databases up. The bench picks its targets from `BENCH_POSTGRES_URL` / `BENCH_MYSQL_URL` (falling back to `DATABASE_URL` / `MYSQL_TEST_URL`) and skips any backend it can't reach. `make bench-prod` runs the same bench inside a Linux container against the compose databases, so commits pay a production-parity fsync. For a heavier sample, raise the op count:
 
 ```bash
 BENCH_OPS=5000 make bench
@@ -189,8 +180,8 @@ BENCH_OPS=5000 make bench
 BENCH_SHARDS=4 make bench
 ```
 
-The SQL drivers are swappable behind the store's pool seam, so a driver trial is one env change: `BENCH_MYSQL_DRIVER=mariadb` runs the MySQL rows over the pipelining-capable `mariadb` pool (the same pool a host opts into with [`createMariadbPool`](/economy/ports/storage/)), and `BENCH_PG_DRIVER` selects the Postgres wire driver. `npm run bench:queue` runs a manifest of rounds back to back with a cool-down between them — one fsync device means rounds must not overlap — and a rig canary (`BENCH_CANARY_OPS`) baselines each backend round to round.
+The SQL drivers are swappable behind the store's pool seam, so a driver trial is one env change. `BENCH_MYSQL_DRIVER=mariadb` runs the MySQL rows over the pipelining-capable `mariadb` pool (the same pool a host opts into with [`createMariadbPool`](/economy/ports/storage/)). `BENCH_PG_DRIVER` selects the Postgres wire driver. `npm run bench:queue` runs a manifest of rounds back to back with a cool-down between them, because one fsync device means rounds must not overlap. A rig canary (`BENCH_CANARY_OPS`) baselines each backend round to round.
 
 ## The scale probe
 
-`make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? It drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single seller, in fixed-size segments, and prints ops/sec per segment. A per-op cost that grows with that account's accumulated history shows up as the segments slowing from left to right.
+`make scale` asks a different question of the same backends: does per-op cost stay flat as one subject's history grows? The probe drives repeated `spend`s against a single buyer and repeated `requestPayout`s against a single seller, in fixed-size segments, and prints ops/sec per segment. If per-op cost grows with that account's accumulated history, the segments slow from left to right.

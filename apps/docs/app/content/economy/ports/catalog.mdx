@@ -1,0 +1,103 @@
+---
+title: 'Catalog'
+summary: 'The catalog port: the host answers a spend''s claimed price with its live offer, and the economy refuses any disagreement before the transaction opens.'
+order: 45
+status: stable
+sourceRefs:
+  [
+    'src/ports.ts · CatalogPort / CatalogOffer',
+    'src/catalog.ts · catalogMismatch',
+    'src/economy.ts · screenOperation',
+  ]
+apiRefs: ['types/ports.CatalogPort', 'types/ports.CatalogOffer']
+related:
+  [
+    'economy/ports/pricing',
+    'economy/reference/outcomes-and-reason-codes',
+    'economy/cookbook/live-repricing',
+  ]
+---
+
+## The price a spend carries is a claim
+
+The price a [`spend`](/economy/reference/operations/spend/) carries is the caller's claim. Nothing
+about a well-formed request proves the buyer was shown the price the seller listed — a stale client,
+a tampered payload, or a miswired store front can all submit a 100-credit purchase against a
+10,000-credit offer. The `Ports.catalog` seam is where the host answers that claim: a
+<ApiLink to="types/ports.CatalogPort" /> whose one `lookup(sku)` returns the exact price and
+recipient split currently on offer, or `null` for a sku that isn't listed.
+
+The check is presence-activated. With no `catalog` in the ports bag, every spend passes through
+untouched and pricing stays the host's own concern. Wire one in, and a spend that disagrees with
+the live offer is refused — whichever door it arrived through.
+
+## The two types the host implements
+
+Two types, both host-owned (see the generated reference for
+<ApiLink to="types/ports.CatalogPort" /> and <ApiLink to="types/ports.CatalogOffer" />):
+
+```ts
+type CatalogOffer = {
+  readonly price: Amount;
+  readonly recipients: ReadonlyArray<Recipient>;
+};
+
+type CatalogPort = {
+  lookup(sku: string): Promise<CatalogOffer | null>;
+};
+```
+
+SKUs are never frozen into config or a module. The host answers `lookup` from its own listing
+store, so a [live repricing](/economy/cookbook/live-repricing/) takes effect on the next request
+with no redeploy. `null` means "not on offer", and a spend for an unlisted sku is refused rather
+than priced at whatever the caller said.
+
+## Where the check runs
+
+The economy runs the check on the one pre-transaction screen every submit path shares — a lone
+`submit`, a `submitBatch`, and the coalescer that fans a burst into one. A door cannot opt out,
+because the screen is the only mint of the operation shape the transaction accepts: `/submit`, a
+module route, the inbox drain, and a host's own in-process call are all held to the offer the same
+way.
+
+A disagreement is an ordinary decline, not a fault: a `rejected`
+[outcome](/economy/reference/outcomes-and-reason-codes/) with reason `CATALOG_MISMATCH`. Its
+`detail.field` names the first disagreeing fact in check order: the `sku` (unlisted), then the
+`price`, then the `recipients` split. Share order doesn't matter — both sides compare sorted.
+
+<Callout type="note">
+  The mismatch is decided before the transaction opens, so it never claims the
+  operation's [idempotency key](/economy/concepts/idempotency/). A retry of the
+  same key with corrected fields runs fresh.
+</Callout>
+
+## Wiring
+
+The port rides in the ports bag the economy is built over. The HTTP server takes no catalog option
+of its own, and that is the point: a gate one door owns is a gate the other doors don't have.
+
+```ts
+import { createEconomy, createServer } from '@pwngh/economy-lab';
+
+const economy = createEconomy({
+  ...ports,
+  catalog: { lookup: async (sku) => listings.offerFor(sku) },
+});
+
+const handler = createServer({ economy, ports, authenticate });
+```
+
+Over the [HTTP service](/economy/reference/http-service/#the-catalog-check), the refusal answers
+`200` with the `rejected` outcome in the body, like every other decline.
+
+## What the port is not
+
+The catalog confirms a claimed price; it never sets one. Splitting a confirmed price into seller
+and platform legs belongs to the [pricing port](/economy/ports/pricing/), and whether the buyer
+can afford it belongs to the ledger.
+
+It is also not the purchase catalog. `TOP_UP_BUNDLES_MINOR` restricts what a
+[top-up](/economy/reference/operations/top-up/) may carry and faults off-catalog amounts as
+malformed, because a store client offering a bundle the platform doesn't sell is miswired. The
+catalog port instead answers for listings that change while the economy runs, and its "no" is a
+decline the buyer can retry after a refresh.

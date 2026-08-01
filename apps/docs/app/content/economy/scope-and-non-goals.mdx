@@ -5,16 +5,16 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/ports.ts#L216-L232 · Processor',
-    'src/ports.ts#L205-L208 · Dispatcher',
-    'src/ports.ts#L270-L283 · Rates',
+    'src/ports.ts#L238-L254 · Processor',
+    'src/ports.ts#L223-L226 · Dispatcher',
+    'src/ports.ts#L298-L311 · Rates',
     'test/conformance/invariants.adversarial.test.ts',
   ]
 apiRefs:
   [
-    'interfaces/src_ports.Processor',
-    'types/src_ports.Dispatcher',
-    'interfaces/src_ports.Rates',
+    'interfaces/ports.Processor',
+    'types/ports.Dispatcher',
+    'interfaces/ports.Rates',
   ]
 related: ['economy/concepts/overview', 'economy/reference/configuration']
 ---
@@ -23,20 +23,30 @@ related: ['economy/concepts/overview', 'economy/reference/configuration']
 
 economy-lab is a study of one thing: the application layer of a credits economy, and the invariants that hold it together.
 
-The ledger invariants (conservation, no-overdraft, [backing](/economy/concepts/solvency/), [chain continuity](/economy/concepts/integrity/)) are enforced to a production standard, pushed into the database and attacked by an adversarial suite that writes violating rows directly rather than trusting the app. The operational edges around that ledger are deliberately stubbed or simplified.
+The lab enforces the ledger invariants (conservation, no-overdraft, [backing](/economy/concepts/solvency/), [chain continuity](/economy/concepts/integrity/)) to a production standard. It pushes them into the database. An adversarial suite attacks them by writing violating rows directly, rather than trusting the app.
 
-This page is the map of that second half: the things economy-lab leaves to a host, and why each one sits outside the lab.
+The application layer extends beyond the ledger core. The machinery a host would otherwise build around it is in scope, each piece with its own page:
+
+- [Cluster nodes](/economy/concepts/cluster/) route session scopes across several economy processes over one shared store.
+- [Instance economies](/economy/concepts/instance-economy/) and [session netting](/economy/concepts/session-netting/) batch thousands of in-world movements into one net posting.
+- [The accrual split](/economy/concepts/accrual-split/) takes a hot seller's earned row off the purchase path.
+- [Platform-account sharding](/economy/concepts/platform-sharding/) spreads the hot platform rows inside the database.
+- [Archival and retention](/economy/ops/archival/) move sealed history to a cold store and expire the other growth surfaces without weakening a proof.
+- The [background worker](/economy/reference/background-worker/)'s rolling re-proof keeps re-verifying old history, so tampering never ages out of detection.
+- [The supervisor](/economy/ops/the-supervisor/) watches the running economy through its own meter and logger ports and remediates a fixed set of incidents.
+
+What stays outside is the outside world itself. The edges that touch it are deliberately stubbed or simplified. This page is the map of that half: the things economy-lab leaves to a host, and why each one sits outside the lab.
 
 <Callout type="note">
-  Nothing on this page is a gap waiting to be filled. The subject of study is
-  the ledger and its invariants, so the rails underneath stay thin.
+  The subject of study is the ledger and its invariants, so the rails
+  underneath stay thin.
 </Callout>
 
 ## No real payment provider
 
 economy-lab never moves real money. When a seller cashes out, the credits retire on the ledger, but the actual disbursement to a bank or card happens somewhere the lab doesn't reach.
 
-That somewhere is a port. The [`Processor`](/economy/ports/processor/) interface is the single seam through which all money leaves the platform, and it has exactly one method: `submitPayout`. The core asks the provider to send money and reads back a `providerRef`; it never learns "did it settle?" by polling. Settlement arrives later, as a webhook the provider sends back.
+That somewhere is a port. The [`Processor`](/economy/ports/processor/) interface is the single seam through which all money leaves the platform. It has one required method, `submitPayout`, and one optional probe, `payoutStatus`. The core asks the provider to send money and reads back a `providerRef`. Settlement arrives later, as a webhook the provider sends back — never by polling the request path. The probe is evidence the payout sweep consults before it force-fails a payout the provider has gone silent on, not a second settlement path.
 
 The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST`s a payout request to whatever endpoint you configure with `PROCESSOR_URL`. With no URL set, the host falls back to the dev stub, which approves every payout. Neither one is a money-transmitter integration.
 
@@ -48,11 +58,11 @@ The reference adapter (`src/adapters/processor.ts`) is an HTTP client that `POST
 
 ## No event consumer
 
-When an operation finishes, some emit a [domain event](/economy/ports/messaging/): a sale completed, a payout settled. economy-lab writes that event to an outbox table in the same transaction as the money move, so it can't be lost or double-sent. Then a relay sweep ships it onward through a [`Dispatcher`](/economy/ports/messaging/).
+Some operations emit a [domain event](/economy/ports/messaging/) when they finish: a sale completed, a payout settled. economy-lab writes that event to an outbox table in the same transaction as the money move, so the event can't be lost or double-sent. A relay sweep then ships it onward through a [`Dispatcher`](/economy/ports/messaging/).
 
-But the thing that receives the event is not part of economy-lab. The <ApiLink to="types/src_ports.Dispatcher" /> is a one-function port that hands an event off for delivery; the SQS or HTTP adapter behind it sends it to _your_ endpoint: an internal bus, a broker, a webhook receiver.
+But the thing that receives the event is not part of economy-lab. The <ApiLink to="types/ports.Dispatcher" /> is a one-function port that hands an event off for delivery. The SQS or HTTP adapter behind it sends the event to _your_ endpoint: an internal bus, a broker, or a webhook receiver.
 
-The same is true in reverse for inbound provider callbacks. economy-lab verifies and applies them, but it does not host the messaging fabric they ride on. With no dispatcher configured, events simply stay in the outbox, undelivered, and nothing leaves the process.
+The same is true in reverse for inbound provider callbacks. economy-lab verifies and applies them, but it does not host the messaging fabric they ride on. With no dispatcher configured, events stay in the outbox, undelivered, and nothing leaves the process.
 
 ## None of the money-transmitter plumbing
 
@@ -65,7 +75,7 @@ That plumbing is the compliance and settlement machinery a custodian is legally 
 - **Sanctions screening**: checking parties against restricted lists.
 - **Payout rails**: the actual bank and card connections that disburse funds.
 
-economy-lab models a `userId` as an opaque `usr_`-prefixed token and stops there. It never sees a real identity, never screens a transfer, and never touches a payout rail. Those are the host's responsibility, on the regulated side of the line; the lab studies the application layer above it.
+economy-lab models a `userId` as an opaque `usr_`-prefixed token and stops there. It never sees a real identity, never screens a transfer, and never touches a payout rail. Those are the host's responsibility, on the regulated side of the line. The lab studies the application layer above it.
 
 <Callout type="note">
   The [risk gates](/economy/concepts/actors-and-authorization/) the lab *does*
@@ -78,20 +88,22 @@ economy-lab models a `userId` as an opaque `usr_`-prefixed token and stops there
 
 The database schema is real and the invariants live inside it, but the migration story is built for a throwaway lab, not a system of record.
 
-`make db-migrate` resets by _dropping the schema_ and rebuilding it. The SQL drops every table and stored routine up front, so re-running it starts clean. That is the right move for a database you can recreate at will, and the worst possible move for one holding real balances: a single migration would erase the ledger.
+`make db-migrate` resets by _dropping the schema_ and rebuilding it. The SQL drops every table and stored routine up front, so re-running it starts clean. That is the right move for a database you can recreate at will. It is the worst possible move for one holding real balances, where a single migration would erase the ledger.
 
 A production custodian needs versioned, forward-only migrations that never destroy committed history. economy-lab doesn't ship that, because the question it asks (can the engine enforce the invariants natively) doesn't depend on it.
 
-## Concurrency at lab scale
+## One database of record
 
-economy-lab takes concurrency seriously where it touches correctness. A linearizability harness oversubscribes concurrent spends and checks that every committed interleaving replays serially to identical balances, and the per-account row locks keep two operations from racing on a balance.
+economy-lab takes concurrency seriously where it touches correctness. A linearizability harness oversubscribes concurrent spends. It checks that every committed interleaving replays serially to identical balances. The per-account row locks keep two operations from racing on a balance.
 
-What it does not chase is throughput at scale. There's no cross-node partitioning of the ledger and no connection-pool tuning for thousands of writers; the one scale lever is [platform-account sharding](/economy/concepts/platform-sharding/), which spreads the hot platform rows inside the same database. The concurrency work proves the invariants hold _under contention_; it doesn't claim the single-database design would carry a production load.
+The design has several scale levers. [Platform-account sharding](/economy/concepts/platform-sharding/) spreads the hot platform rows. [The accrual split](/economy/concepts/accrual-split/) takes a hot seller off the purchase path. [Session netting](/economy/concepts/session-netting/) turns thousands of small movements into one posting. [Cluster nodes](/economy/concepts/cluster/) run several economy processes against the same store.
+
+Every lever shares one boundary: all postings land in a single database of record. There is no cross-database partitioning of the ledger and no distributed commit. The cluster kit routes sessions across nodes, but each posting still commits in the one store where the invariants live. Partitioning the ledger itself would move the invariants out of one engine's native reach, and whether an engine can enforce them natively is the question the lab exists to ask.
 
 ## Fixed rates, no live FX
 
 Credits convert to dollars at fixed, platform-set rates, never a live market. The [`Rates`](/economy/ports/rates/) port supplies the [`buy`/`par`/`payout`](/economy/concepts/money-model/) rates as business constants a deployment configures.
 
-The reference adapter (`src/adapters/rates.ts`) reads three integers from config and returns them; the only currencies are `CREDIT` and `USD`, and any other pair is treated as a wiring bug that throws. There is no foreign-exchange source, no rate that changes between two reads, no market risk to hedge. A credit is worth what the platform says it's worth, and the [spread](/economy/concepts/money-model/) between buying and cashing out is the platform's margin, set once.
+The reference adapter (`src/adapters/rates.ts`) reads six integers from config — a `rate` and a `scale` for each of the three rates — and returns them. The only currencies are `CREDIT` and `USD`, and the adapter treats any other pair as a wiring bug that throws. There is no foreign-exchange source, no rate that changes between two reads, and no market risk to hedge. A credit is worth what the platform says it's worth. The [spread](/economy/concepts/money-model/) between buying and cashing out is the platform's margin, set once.
 
-Fixed rates keep the money model deterministic — what makes the invariants checkable after _every_ operation; a live feed would trade that for realism the lab doesn't need.
+Fixed rates keep the money model deterministic, and determinism is what makes the invariants checkable after _every_ operation. A live feed would trade that for realism the lab doesn't need.

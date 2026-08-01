@@ -5,26 +5,26 @@ order: 10
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L376-L436 · Economy.read',
-    'src/economy.ts#L98-L112 · read',
+    'src/contract.ts#L620 · Economy.read',
+    'src/economy.ts#L142 · read',
     'test/economy.read.test.ts',
   ]
-apiRefs: ['interfaces/src.Economy']
+apiRefs: ['interfaces/economy-lab.Economy']
 related: ['economy/reference/outcomes-and-reason-codes']
 ---
 
 import readsHtml from '../../../snippets/reads.ts?shiki';
 
-`read` is the query half of [the `Economy`](/economy/reference/the-economy/): "what's this balance?", "did this go through?", "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
+`read` is the query half of [the `Economy`](/economy/reference/the-economy/). It answers questions like "what's this balance?", "did this go through?", and "does this user own that item?". Nothing under `read` writes a ledger entry, claims an idempotency key, or records a velocity attempt.
 
 Every method lives on the `economy.read` group, and the whole group is read-only. You call them the same way you'd call `submit`:
 
 ```ts
 const balance = await economy.read.balance(spendable('usr_a1'));
-// → { currency: "CREDIT", minor: 5000n }
+// → { currency: "CREDIT", minor: 120000n } — 1,200 credits
 ```
 
-A few of these return a single value you await; a few stream many rows you iterate; one (`status`) is synchronous. Three of them, live — and free to repeat, because reads never move the books:
+A few of these return a single value you await. A few stream many rows you iterate. One, `status`, is synchronous. Here are three of them, live. They are free to repeat, because reads never move the books:
 
 <Runnable name="reads" html={readsHtml} />
 
@@ -34,14 +34,14 @@ The sections below group them by what you're asking for.
 
 These two answer "how much, and how did it get there?" for one account at a time.
 
-`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). It's a stored running total, so it's a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like <ApiLink to="functions/src.spendable" />, <ApiLink to="functions/src.earned" />, or <ApiLink to="functions/src.promo" />. One exception to "single": with [platform sharding](/economy/concepts/platform-sharding/) on, a bare sharded account reads as the sum over its shard rows — one row per shard, still no history walk:
+`read.balance(account)` returns the account's current balance as an [`Amount`](/economy/concepts/money-model/). The balance is a stored running total, so reading it is a single O(1) read rather than a re-sum over the account's whole history. Pass an account reference built from a helper like <ApiLink to="functions/economy-lab.spendable" />, <ApiLink to="functions/economy-lab.earned" />, or <ApiLink to="functions/economy-lab.promo" />. There is one exception to "single". With [platform sharding](/economy/concepts/platform-sharding/) on, a bare sharded account reads as the sum over its shard rows. That is one row per shard, still with no history walk:
 
 ```ts
 const balance = await economy.read.balance(earned('usr_seller'));
-// → { currency: "CREDIT", minor: 1200n }
+// → { currency: "CREDIT", minor: 2540000n } — 25,400 credits, enough to clear the payout minimum
 ```
 
-`read.statement(account, range)` returns one page of that account's [entries](/economy/concepts/accounts-and-double-entry/) within a time range. The range is half-open in epoch milliseconds (`from` included, `to` not), and the range is the paging model: to walk a long history, tile it with consecutive windows — the windows join losslessly because an entry belongs to exactly one half-open range. The page's `cursor` field is reserved: no read accepts one, and every engine returns `null` today.
+`read.statement(account, range)` returns one page of that account's [entries](/economy/concepts/accounts-and-double-entry/) within a time range. The range is half-open in epoch milliseconds: `from` is included, `to` is not. The range is also the paging model. To walk a long history, tile it with consecutive windows. The windows join losslessly, because an entry belongs to exactly one half-open range. The page's `cursor` field is reserved. No read accepts one, and every engine returns `null`.
 
 ```ts
 const page = await economy.read.statement(spendable('usr_a1'), {
@@ -51,7 +51,9 @@ const page = await economy.read.statement(spendable('usr_a1'), {
 // → { account, entries: [{ txnId, amount, postedAt }, …], cursor: null }
 ```
 
-Each entry names the transaction it came from, the signed amount applied to this account, and when it posted, enough to render a statement row with no follow-up query.
+Each entry names the transaction it came from, the signed amount applied to this account, and when it posted. That is enough to render a statement row with no follow-up query.
+
+Entries come back in commit order, the same on every engine. `postedAt` picks the entries and does not order them: it is your clock's reading at the moment of the append, and a clock that steps backward writes a later posting with an earlier `postedAt`. Two entries can also share a transaction, because a posting is allowed several legs on one account; those keep the order the posting wrote them in.
 
 ## A posting or a payout by id
 
@@ -67,9 +69,9 @@ const posting = await economy.read.posting('txn_8821');
 
 This lets a reader resolve a posting through `read` without reaching past it into the raw [`Store`](/economy/ports/storage/). Unlike a statement, it isn't scoped to one account. It returns the whole transaction with every leg it touched.
 
-Two conventions to hold onto when rendering legs. Amounts are debit-positive: the sign is the ledger's, not the account holder's, so a top-up shows a negative amount on the wallet it credits. To display a leg the way that account's owner reads it, convert it with `balanceDelta` from [`/store-kit`](/api/modules/src_store-kit.html). And a committed outcome's `legs` may be empty — lifecycle operations like [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) post a marker transaction that moves no money — so render from the legs themselves rather than assuming every commit carries lines.
+Hold onto two conventions when rendering legs. First, amounts are debit-positive. The sign is the ledger's, not the account holder's, so a top-up shows a negative amount on the wallet it credits. To display a leg the way that account's owner reads it, convert it with `balanceDelta` from [`/store-kit`](/api/modules/store-kit.html). Second, a committed outcome's `legs` may be empty. Lifecycle operations like [`cancelSubscription`](/economy/reference/operations/cancel-subscription/) post a marker transaction that moves no money. Render from the legs themselves rather than assuming every commit carries lines.
 
-`read.saga(id)` loads one payout [saga](/economy/concepts/payout-saga/) by its id: its current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. The row's key is `id`; an operation that acts on one, like [`settlePayout`](/economy/reference/operations/settle-payout/), takes that same value as its `sagaId`. It returns `null` for an unknown payout id:
+`read.saga(id)` loads one payout [saga](/economy/concepts/payout-saga/) by its id. The row carries the saga's current state, the provider reference once submitted, the attempt count, and the reason it failed if it did. The row's key is `id`. An operation that acts on one, like [`settlePayout`](/economy/reference/operations/settle-payout/), takes that same value as its `sagaId`. The read returns `null` for an unknown payout id:
 
 ```ts
 const saga = await economy.read.saga('pay_4410');
@@ -81,23 +83,23 @@ The [background worker](/economy/reference/background-worker/) advances a saga t
 
 ## Ownership and status
 
-Not every question is about money: `read.entitled` reports what a user owns, and `read.status` whether the economy is open for writes.
+Not every question is about money. `read.entitled` reports what a user owns. `read.status` reports whether the economy is open for writes.
 
-`read.entitled(userId, sku)` returns `true` or `false`: does this user currently own this SKU (an item or feature)? Ownership is a record, not a balance, so it has its own reader: the readable side of the [`grantEntitlement` and `revokeEntitlement`](/economy/reference/operations/grant-entitlement/) operations that a UI gates access on:
+`read.entitled(userId, sku)` returns `true` or `false`. It answers one question: does this user currently own this SKU (an item or feature)? Ownership is a record rather than a balance, and it gets its own reader. This read is the readable side of the [`grantEntitlement` and `revokeEntitlement`](/economy/reference/operations/grant-entitlement/) operations, and a UI gates access on it:
 
 ```ts
 const owns = await economy.read.entitled('usr_a1', 'wrld_pass');
 // → true
 ```
 
-`read.status()` returns the economy's pause state right now: whether a maintenance window is in effect, its configured bounds, and when writes resume. It's the only synchronous read: derived from config plus the clock rather than stored, it always reflects the live window:
+`read.status()` returns the economy's pause state right now. The result says whether a maintenance window is in effect, gives its configured bounds, and says when writes resume. It is the only synchronous read. The economy derives it from config plus the clock rather than from storage, so it always reflects the live window:
 
 ```ts
 const status = economy.read.status();
 // → { maintenanceActive: false, pauseStart: null, pauseEnd: null, resumesAt: null }
 ```
 
-This lets a UI render a maintenance banner directly, instead of inferring the pause from a declined write. While the window is active, a [`user` principal's](/economy/concepts/actors-and-authorization/) discretionary write is declined with `ECONOMY_PAUSED`; `system` and `operator` writes keep flowing so external money can still settle.
+This lets a UI render a maintenance banner directly, instead of inferring the pause from a declined write. While the window is active, the economy declines a [`user` principal's](/economy/concepts/actors-and-authorization/) discretionary write with `ECONOMY_PAUSED`. `system` and `operator` writes keep flowing; external money can still settle.
 
 <Callout type="note">
   A pause only ever blocks writes from a `user` actor. Reads (including
@@ -107,9 +109,9 @@ This lets a UI render a maintenance banner directly, instead of inferring the pa
 
 ## Streaming the whole board
 
-These three stream every record of a kind, newest first, because a real ledger holds far more than you'd want in one array. Each returns an `AsyncIterable`, so you iterate with `for await` and stop whenever you've seen enough.
+These reads stream many rows, because a real ledger holds far more than you'd want in one array. Each returns an `AsyncIterable`: iterate with `for await` and stop whenever you've seen enough. The first three stream every record of a kind, newest first. The fourth, `read.lineage`, walks one account's chain in commit order.
 
-`read.accounts()` streams every account that has a balance row. It's the prover's own enumeration, exposed so a reader can list accounts (and derive the users behind them) without tracking minted ids itself:
+`read.accounts()` streams every account that has a balance row. It is the prover's own enumeration. The library exposes it so a reader can list accounts (and derive the users behind them) without tracking minted ids itself:
 
 ```ts
 for await (const account of economy.read.accounts()) {
@@ -117,7 +119,7 @@ for await (const account of economy.read.accounts()) {
 }
 ```
 
-`read.payouts()` streams every payout [saga](/economy/concepts/payout-saga/), newest first: the whole board, settled and failed payouts included, not only the due ones the worker claims. It lets a UI render payout status without tracking minted payout ids:
+`read.payouts()` does the same for payout [sagas](/economy/concepts/payout-saga/), newest first. That is the whole board, with settled and failed payouts included, not only the due ones the worker claims. It lets a UI render payout status without tracking minted payout ids:
 
 ```ts
 for await (const saga of economy.read.payouts()) {
@@ -125,7 +127,7 @@ for await (const saga of economy.read.payouts()) {
 }
 ```
 
-`read.postings()` streams every committed posting, newest first: the whole journal. That's user operations and the worker's own postings alike, across every account — not only the postings your own service submitted. Each posting carries its full legs, so a row renders and expands without a second lookup:
+The whole journal comes from `read.postings()`, which streams every committed posting, newest first. It holds user operations and the worker's own postings alike, across every account — not only the postings your own service submitted. Each posting carries its full legs, so a row renders and expands without a second lookup:
 
 ```ts
 for await (const posting of economy.read.postings()) {
@@ -133,16 +135,44 @@ for await (const posting of economy.read.postings()) {
 }
 ```
 
+`read.lineage(account, options?)` streams one account's [chain links](/economy/concepts/integrity/) in commit order. Each link is the posting as stored, plus the two hashes that tie it into the account's tamper-evident chain: `prevHash`, the account's head before the posting, and `hash`, the head after it. Pass `sinceHash` in the options to start after the link carrying that head hash instead of from the beginning. An unknown hash streams nothing:
+
+```ts
+for await (const link of economy.read.lineage(earned('usr_seller'))) {
+  // … one StoredLink at a time: { txnId, legs, meta, prevHash, hash }
+}
+```
+
+This is the read an external verifier walks to recompute each hash and confirm no stored line was edited. The first link's `prevHash` is a fixed all-zeros "genesis" value.
+
 <Callout type="warning">
-  "Newest first" on `read.postings` is the commit sequence, so the order is
-  total and a page never reorders. But `read.payouts` orders by `updatedAt`, and
-  ties on that timestamp come back in an unspecified order that varies by
-  backend. Don't depend on the order of sagas that share an `updatedAt`.
+  "Newest first" on `read.postings` is the commit sequence. The order is total,
+  and a page never reorders. `read.payouts` instead orders by `updatedAt`. Ties
+  on that timestamp come back in an unspecified order that varies by backend.
+  Don't depend on the order of sagas that share an `updatedAt`.
 </Callout>
+
+## The storefront reads
+
+Four per-user reads compose the storefront and creator dashboards, each one call:
+
+- `read.wallet(userId)` — the three balances plus `payableNow`, the earned portion past
+  its [maturity horizon](/economy/concepts/credit-maturity/): exactly what a payout
+  request could draw this instant. A user who never transacted reads as zeros.
+- `read.entitlements(userId)` — one row per SKU the user holds a non-revoked grant on, expired
+  included, sorted by sku. Each row names the sources that granted it and the longest of their
+  expiries.
+- `read.subscriptions(userId)` — every subscription, newest first, all states; a dashboard
+  shows canceled and lapsed rows too.
+- `read.payouts({ userId })` — the payout board narrowed to one user, pushed down on every
+  engine.
+
+Over HTTP the same four serve under `/v1` with principal scoping — see the
+[HTTP service](/economy/reference/http-service/).
 
 ## The solvency proof
 
-`read.health()` runs the integrity check and returns a [`ProveReport`](/economy/concepts/the-proof/): a set of flags, each one a property the ledger is supposed to hold:
+`read.health()` runs the integrity check and returns a [`ProveReport`](/economy/concepts/the-proof/). The report is a set of flags. Each flag is a property the ledger is supposed to hold:
 
 ```ts
 const report = await economy.read.health();
@@ -151,20 +181,22 @@ const report = await economy.read.health();
 
 It walks every posted account once and re-derives each balance from the recorded debit and credit lines, rather than trusting the cached running total. So `conserved`, `backed`, `noOverdraft`, `chainIntact`, and `consistent` each report on the books as the entries actually describe them. This is the readable face of [solvency](/economy/concepts/solvency/) and the [hash-chain integrity](/economy/concepts/integrity/) the economy maintains.
 
+The report's `firstBreak` is always `null` here, including when `chainIntact` is false: this check reads each account's newest head and opens no link, so it has none to name. The full prover fills it, and `prover` on the report says which of the two you are holding.
+
 `read.health` is a thorough enough check to deserve its own page. For what each flag means, how `shortfall` and `drift` are computed, and how this lighter in-process check relates to the full out-of-band prover, see [the proof](/economy/concepts/the-proof/).
 
 ## Caveats
 
-- `read.balance` is the live total, not the spendable one: money still inside its [maturity window](/economy/concepts/credit-maturity/) counts here but can't be spent or cashed out yet.
+- `read.balance` is the live total, not the spendable one. Money still inside its [maturity window](/economy/concepts/credit-maturity/) counts here, but it can't be spent or cashed out yet.
 - On a sharded platform account, the bare id reads as the sum over its shard rows — one logical number whatever [`PLATFORM_SHARDS`](/economy/concepts/platform-sharding/) is set to.
-- The streaming reads (`accounts`, `payouts`, `postings`, `lineage`) can be long on a busy ledger. Iterate and stop early; don't collect them all.
-- Nothing under `read` claims a key or counts toward a velocity window — reads are free to repeat.
+- The streaming reads (`accounts`, `payouts`, `postings`, `lineage`) can be long on a busy ledger. Iterate and stop early. Don't collect them all.
+- Nothing under `read` claims a key or counts toward a velocity window. Reads are free to repeat.
 
 ## Troubleshooting
 
 ### The balance says the money is there, but the spend was rejected
 
-`read.balance` reports the live total; spends and payouts draw only the part that has cleared its settlement wait. A fresh top-up can cover the price and still decline as `FUNDS_IMMATURE`. The rejection carries when the funds clear:
+`read.balance` reports the live total. Spends and payouts draw only the part that has cleared its settlement wait. A fresh top-up can cover the price and still decline as `FUNDS_IMMATURE`. The rejection carries the time when the funds clear:
 
 ```ts
 const outcome = await economy.submit(spend({ ...order }));
@@ -177,4 +209,4 @@ if (outcome.status === 'rejected' && outcome.detail.reason === 'FUNDS_IMMATURE')
 
 ### `read.posting` returns null for a transaction I just saw
 
-Only committed postings exist to read. A `rejected` outcome posted nothing, and a `duplicate` outcome's transaction is the _original_ posting — its id is the one to look up. If the id came from another economy instance (a fresh in-memory engine holds fresh history), it won't resolve here. See [outcomes & reason codes](/economy/reference/outcomes-and-reason-codes/).
+Only committed postings exist to read. A `rejected` outcome posted nothing. A `duplicate` outcome's transaction is the _original_ posting, so its id is the one to look up. If the id came from another economy instance, it won't resolve here — a fresh in-memory engine holds fresh history. See [outcomes & reason codes](/economy/reference/outcomes-and-reason-codes/).

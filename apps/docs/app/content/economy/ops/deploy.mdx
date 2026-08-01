@@ -1,0 +1,61 @@
+---
+title: 'The deploy path'
+summary: 'From a laptop economy to a served one, in the order that cannot skip a proof: pick the engine by env, migrate, preflight, serve under the production posture, run the worker, and keep the backup drill green. Every step is a command that exists today.'
+plain: 'Opening day: pick the building, lay the shelves, walk the safety checklist, unlock the front door, start the night crew, and rehearse the fire drill before the first customer.'
+order: 9
+status: stable
+sourceRefs:
+  [
+    'src/index.ts · openPorts',
+    'src/index.ts · preflight',
+    'src/config.ts · loadConfig',
+  ]
+related:
+  [
+    'economy/ops/threat-model',
+    'economy/ops/backup-restore',
+    'economy/reference/configuration',
+  ]
+---
+
+Every step below is a command that exists today; nothing is planned. The env is the whole
+deployment interface — every knob has one spelling, read in one place, and the
+[configuration page](/economy/reference/configuration/) is the full inventory.
+
+## 1 · Pick the engine
+
+`DATABASE_URL` selects Postgres or MySQL; absent means in-memory. The same logic runs on
+every engine, held by one conformance suite — the engine choice changes operations, never
+semantics.
+
+## 2 · Migrate
+
+The server never creates tables. Apply the canonical schema with the migration runner
+(`make db-migrate`), which stamps `schema_meta`; a version mismatch refuses to boot with
+the exact instruction.
+
+## 3 · Preflight
+
+`preflight(env)` reports what the env would wire — engine, signer, rates, payout provider,
+secret presence, never values. In production, `openPorts` refuses on any error the
+preflight reports: dev rates, a missing signer, and a missing payout provider are all
+boot-time refusals, not runtime surprises.
+
+## 4 · Serve, under the posture
+
+The production posture requires `NODE_ENV=production`, a real `authenticate`, and clean
+production preflight — the [threat model](/economy/ops/threat-model/) states exactly what
+the host enforces from there, and TLS and placement stay yours. One process serves; one
+worker process sweeps (`WORKER_INTERVAL_MS`, `WORKER_BATCH`). Exactly one worker per
+deployment.
+
+## 5 · Keep the proofs running
+
+- `read.health()` is the full prover — conserved, backed, no overdraft, chains intact.
+- The [backup drill](/economy/ops/backup-restore/) proves the canonical export re-derives
+  offline; run it on a schedule, not after the incident.
+- The [supervisor](/economy/ops/the-supervisor/) watches the twelve incident signatures
+  when composed in.
+
+Rotation, archival, and the runbooks each have their own page under Ops; the deploy path
+ends where they begin.

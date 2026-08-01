@@ -5,9 +5,9 @@ order: 20
 status: stable
 sourceRefs:
   [
-    'src/contract.ts#L309 · Outcome',
+    'src/contract.ts#L322 · Outcome',
     'src/errors.ts#L27 · RejectionCode',
-    'src/errors.ts#L103 · ERROR_CODES',
+    'src/errors.ts#L108 · ERROR_CODES',
   ]
 related: ['economy/reference/the-economy', 'economy/reference/configuration']
 ---
@@ -20,8 +20,8 @@ import rejectionPausedHtml from '../../../snippets/rejection-paused.ts?shiki';
 
 ## The shape of an answer
 
-Every call to `submit` resolves to one <ApiLink to="types/src.Outcome" />. The
-`status` field tells you which of three things happened, and the rest of the object carries exactly
+Every call to `submit` resolves to one <ApiLink to="types/economy-lab.Outcome" />. The
+`status` field tells you which of three things happened. The rest of the object carries exactly
 what that status implies.
 
 ```ts
@@ -46,7 +46,7 @@ const result = await economy.submit(
     idempotencyKey: 'ord_1',
     actor: systemActor('payments'),
     userId: 'usr_buyer',
-    amount: toAmount('CREDIT', 5_000n),
+    amount: toAmount('CREDIT', 60_000n), // the 600-credit bundle
     source: 'card',
   }),
 );
@@ -55,33 +55,33 @@ if (result.status === 'committed') {
 }
 ```
 
-Its `legs` are the lines that posted, and its `links` record how
-each touched account's hash chain advanced: the per-account integrity trail described under
-[the chain](/economy/concepts/integrity/).
+Its `legs` are the lines that posted. Its `links` record how
+each touched account's hash chain advanced. That advance is the per-account integrity trail
+described under [the chain](/economy/concepts/integrity/).
 
 ### `duplicate`: you already did this
 
 A `duplicate` outcome means you submitted an operation whose `idempotencyKey` matched one already
-processed, so the economy returned the earlier result instead of running it again. This is the
-visible side of [idempotency](/economy/concepts/idempotency/): a retried request runs at most once.
+processed. The economy returned the earlier result instead of running it again. This is the
+visible side of [idempotency](/economy/concepts/idempotency/), where a retried request runs at most once.
 
-It carries the same <ApiLink to="interfaces/src.Transaction" /> the original commit did, so a `duplicate` counts as success.
-A network retry, a double-clicked button, or an at-least-once delivery queue all land here,
-and the caller can treat `duplicate` exactly like `committed`.
+It carries the same <ApiLink to="interfaces/economy-lab.Transaction" /> the original commit did, so a `duplicate` counts as success.
+A network retry, a double-clicked button, or an at-least-once delivery queue all land here.
+The caller can treat `duplicate` exactly like `committed`.
 
 <Callout type="tip">
   If you only care whether the money moved, branch on `committed` and
-  `duplicate` together, since both hand you the same `transaction`. Reserve a
+  `duplicate` together. Both hand you the same `transaction`. Reserve a
   separate path for `rejected`.
 </Callout>
 
 ### `rejected`: a declined-but-valid request
 
 A `rejected` outcome means the request was well-formed and the system was healthy, but the answer is
-no. It carries a <ApiLink to="types/src.RejectionDetail" /> in `detail`: a discriminated union whose `detail.reason` names
-the [`RejectionCode`](#the-rejectioncode-catalog), and whose remaining fields are exactly the
-specifics that decline needs — the account that was short, the order that wasn't found, when writes
-resume.
+no. It carries a <ApiLink to="types/economy-lab.RejectionDetail" /> in `detail`. That object is a discriminated union: `detail.reason` names
+the [`RejectionCode`](#the-rejectioncode-catalog), and the remaining fields carry exactly the
+specifics that decline needs. Those specifics might be the account that was short, the order that
+wasn't found, or when writes resume.
 
 ```ts
 const result = await economy.submit(
@@ -91,7 +91,7 @@ const result = await economy.submit(
     orderId: 'ord_1',
     buyerId: 'usr_buyer',
     sku: 'wrld_pass',
-    price: toAmount('CREDIT', 400n),
+    price: toAmount('CREDIT', 48_000n), // a 480-credit listing
     recipients: [{ sellerId: 'usr_seller', shareBps: 10_000 }],
   }),
 );
@@ -100,70 +100,78 @@ if (result.status === 'rejected' && result.detail.reason === 'INSUFFICIENT_FUNDS
 }
 ```
 
-A rejection comes back as data, so you handle it in an ordinary `if` branch; see the [throw-versus-decline rule](#rejected-versus-thrown) below.
+A rejection comes back as data — you handle it in an ordinary `if` branch. See the [throw-versus-decline rule](#rejected-versus-thrown) below.
 
-The money fields in `detail` — `need`, `have`, `minimum`, `amount` — are branded [`Amount`](/economy/concepts/money-model/)s, so a caller compares them directly (`detail.have.minor < detail.need.minor`) and formats them with <ApiLink to="functions/src.encodeAmount" />. Over the [HTTP service](/economy/reference/http-service/) a rejection travels as `{ status, reason, detail }`: the top-level `reason` is a convenience copy derived from `detail.reason` — in TypeScript, `detail.reason` is the sole discriminant — and the money fields travel as the same decimal strings every other wire amount uses (`bigint` fields such as `limitMinor` become decimal strings too).
+The money fields in `detail` — `need`, `have`, `minimum`, `amount` — are branded [`Amount`](/economy/concepts/money-model/)s. A caller compares them directly (`detail.have.minor < detail.need.minor`) and formats them with <ApiLink to="functions/economy-lab.encodeAmount" />. Over the [HTTP service](/economy/reference/http-service/) a rejection travels as `{ status, reason, detail }`. The top-level `reason` is a convenience copy derived from `detail.reason`. In TypeScript, `detail.reason` is the sole discriminant. The money fields travel as the same decimal strings every other wire amount uses. `bigint` fields such as `limitMinor` become decimal strings too.
 
 ## The `RejectionCode` catalog
 
-A <ApiLink to="types/src.RejectionCode" /> names one expected reason a valid request gets declined on a healthy system. Each
-one is a stable string you can branch on, and each is raised by a specific set of operations.
+A <ApiLink to="types/economy-lab.RejectionCode" /> names one expected reason a valid request gets declined on a healthy system. Each
+one is a stable string you can branch on. Each is raised by a specific set of operations.
 
 The table lists every code, what it means, and which operation kinds return it. The operation names
 map to the pages under [operations](/economy/reference/operations/).
 
 | Code                   | What it means                                                                                              | Raised by                                                                                |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| `INSUFFICIENT_FUNDS`   | The account can't cover the amount the request needs.                                                      | <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" />                                                    |
-| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.requestPayout" /> (renewals defer on it)                             |
-| `RISK_DENIED`          | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request.                     | <ApiLink to="variables/src.spend" />, <ApiLink to="variables/src.subscribe" />, <ApiLink to="variables/src.topUp" />, <ApiLink to="variables/src.grantPromo" />, <ApiLink to="variables/src.requestPayout" /> (every risk-screened write) |
-| `DUPLICATE_ORDER`      | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | <ApiLink to="variables/src.spend" />                                                                                  |
-| `UNKNOWN_ORDER`        | No sale was found for the `orderId` the request refers to.                                                 | <ApiLink to="variables/src.refund" />                                                                                 |
-| `NOT_ENTITLED`         | The user doesn't own the item or feature the request needs.                                                | <ApiLink to="variables/src.revokeEntitlement" />                                                                      |
-| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request.                                                                       | <ApiLink to="variables/src.cancelSubscription" />                                                                     |
-| `ALREADY_SUBSCRIBED`   | The user already has an active subscription to this `sku` / seller; a second would double-bill.            | <ApiLink to="variables/src.subscribe" />                                                                              |
-| `BELOW_MINIMUM`        | A payout was requested for less than the configured minimum.                                               | <ApiLink to="variables/src.requestPayout" />                                                                          |
-| `PAYOUT_TOO_SOON`      | A payout was requested before the configured minimum gap since the user's last request.                    | <ApiLink to="variables/src.requestPayout" />                                                                          |
-| `PAYEE_UNVERIFIED`     | The configured payee directory hasn't cleared the seller's identity verification.                          | <ApiLink to="variables/src.requestPayout" />                                                                          |
+| `INSUFFICIENT_FUNDS`   | The account can't cover the amount the request needs.                                                      | <ApiLink to="variables/economy-lab.spend" />, <ApiLink to="variables/economy-lab.subscribe" />, <ApiLink to="variables/economy-lab.requestPayout" />                                                    |
+| `FUNDS_IMMATURE`       | The funds exist but are still in their holding period, so they aren't usable yet.                          | <ApiLink to="variables/economy-lab.spend" />, <ApiLink to="variables/economy-lab.subscribe" />, <ApiLink to="variables/economy-lab.requestPayout" /> (renewals defer on it)                             |
+| `RISK_DENIED`          | The [velocity / abuse check](/economy/concepts/spend-velocity/) declined this request.                     | <ApiLink to="variables/economy-lab.spend" />, <ApiLink to="variables/economy-lab.subscribe" />, <ApiLink to="variables/economy-lab.topUp" />, <ApiLink to="variables/economy-lab.grantPromo" />, <ApiLink to="variables/economy-lab.requestPayout" /> (every risk-screened write) |
+| `DUPLICATE_ORDER`      | A `spend` reused an `orderId` that already has a completed sale, but carried a different `idempotencyKey`. | <ApiLink to="variables/economy-lab.spend" />                                                                                  |
+| `UNKNOWN_ORDER`        | No sale was found for the `orderId` the request refers to.                                                 | <ApiLink to="variables/economy-lab.refund" />                                                                                 |
+| `NOT_ENTITLED`         | The user doesn't own the item or feature the request needs.                                                | <ApiLink to="variables/economy-lab.revokeEntitlement" />                                                                      |
+| `UNKNOWN_SUBSCRIPTION` | No subscription matched the request.                                                                       | <ApiLink to="variables/economy-lab.cancelSubscription" />                                                                     |
+| `ALREADY_SUBSCRIBED`   | The user already has an active subscription to this `sku` / seller; a second would double-bill.            | <ApiLink to="variables/economy-lab.subscribe" />                                                                              |
+| `BELOW_MINIMUM`        | A payout was requested for less than the configured minimum.                                               | <ApiLink to="variables/economy-lab.requestPayout" />                                                                          |
+| `PAYOUT_TOO_SOON`      | A payout was requested before the configured minimum gap since the user's last request.                    | <ApiLink to="variables/economy-lab.requestPayout" />                                                                          |
+| `PAYEE_UNVERIFIED`     | The configured payee directory hasn't cleared the seller's identity verification.                          | <ApiLink to="variables/economy-lab.requestPayout" />                                                                          |
 | `ECONOMY_PAUSED`       | A maintenance window is in effect, so an end user's discretionary write is declined.                       | Any paused user write                                                                    |
+| `CATALOG_MISMATCH`     | The spend disagrees with the host catalog's live offer; `detail.field` names the disagreeing fact (`sku`, `price`, or `recipients`). | <ApiLink to="variables/economy-lab.spend" /> with a [catalog port](/economy/ports/catalog/) in the ports bag |
 
 A few of these reward a closer look.
 
-`FUNDS_IMMATURE` is a timing problem: the money is there, but it hasn't cleared its
-maturity window yet, a concept that lives with [credit maturity](/economy/concepts/credit-maturity/).
-The `detail` names the `source` whose window is still open and `availableAt` — when the funds
-will have cleared, assuming no further activity — so a caller can tell the user when to try again.
+`FUNDS_IMMATURE` is a timing problem. The money is there, but it hasn't cleared its
+maturity window yet. That concept lives with [credit maturity](/economy/concepts/credit-maturity/).
+The `detail` names the `source` whose window is still open and `availableAt`, the time when the
+funds will have cleared assuming no further activity. A caller can use `availableAt` to tell the
+user when to try again.
 
-`RISK_DENIED` names its trigger the same way: its `detail` carries which window tripped
-(`window` — `'inflow'` for top-ups and promo grants, `'outflow'` for spends, subscriptions,
-and payout requests) and the `limitMinor` ceiling of that
+`RISK_DENIED` names its trigger the same way. Its `detail` carries `window`, which names the
+window that tripped: `'inflow'` for top-ups and promo grants, `'outflow'` for spends,
+subscriptions, and payout requests. It also carries `limitMinor`, the ceiling of that
 [velocity window](/economy/concepts/spend-velocity/).
 
 `DUPLICATE_ORDER` catches a specific client mistake: a retried `spend` that lost its original
-`idempotencyKey`. The `orderId` identifies a unique purchase, so a second charge for the same order
-is a declined "no" rather than a thrown fault.
+`idempotencyKey`. The `orderId` identifies a unique purchase. A second charge for the same order
+is therefore a declined "no" rather than a thrown fault.
 
 `ECONOMY_PAUSED` only ever stops end-user writes. A `system` actor's settlement and an `operator`'s
-manual fix are never paused, per the rules on [actors and authorization](/economy/concepts/actors-and-authorization/).
-The decline carries `resumesAt` in its `detail` so the caller can tell the user when to come back.
+manual fix are never paused. The rules on [actors and authorization](/economy/concepts/actors-and-authorization/) define that split.
+The decline carries `resumesAt` in its `detail`. The caller can use it to tell the user when to come back.
 
 <Callout type="note">
   `ECONOMY_PAUSED` is a decline you can see coming. The `read.status()` reader
-  exposes the live pause state directly, so a UI can show a maintenance banner
+  exposes the live pause state directly. A UI can show a maintenance banner
   without first submitting a write and reading the rejection back. See the [read
   surface](/economy/reference/reads/).
 </Callout>
 
+`CATALOG_MISMATCH` is the decline that answers a caller's own price. When the economy is built
+with a [catalog port](/economy/ports/catalog/), every `spend` is checked
+against the host's live offer before it runs, whichever door it arrived through. The `detail`
+carries the `sku` and the first disagreeing `field` — `sku`, `price`, or `recipients`. Without
+the port, the same spend passes through unchecked.
+
 ## Rejected versus thrown
 
 A `rejected` outcome is the economy's considered
-"no" to a question it understood, while a thrown fault means the question itself was broken.
+"no" to a question it understood. A thrown fault means the question itself was broken.
 
-They never overlap: the core decides up front which path a problem takes, so a given failure
+They never overlap. The core decides up front which path a problem takes. A given failure
 arrives either as a `RejectionCode` in the outcome or as a thrown exception, never as both.
 
-Thrown faults carry their own codes, kept deliberately separate from the rejection codes in
-<ApiLink to="variables/src.ERROR_CODES" />. Six of them are the ones you'll meet when a request is malformed or misdirected:
+Thrown faults carry their own codes. <ApiLink to="variables/economy-lab.ERROR_CODES" /> keeps them separate from the
+rejection codes. You'll meet these six when a request is malformed or misdirected:
 
 | Thrown code               | Constant              | When it's thrown                                                                                         |
 | ------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -175,29 +183,29 @@ Thrown faults carry their own codes, kept deliberately separate from the rejecti
 | `SESSION.MISROUTED`       | `SESSION_MISROUTED`   | A scope's traffic reached a [cluster node](/economy/concepts/cluster/) that doesn't own it; `detail.owner` names the node that does. |
 
 The line between the two follows cause rather than severity. `INSUFFICIENT_FUNDS` is a healthy system
-giving an expected answer — a rejection you show the user. `INVALID_AMOUNT` means the caller sent a
-number that can't be money — a fault to fix in code.
+giving an expected answer. You show that rejection to the user. `INVALID_AMOUNT` means the caller sent a
+number that can't be money. That is a fault to fix in code.
 
-That separation has a practical payoff: ordinary "no" answers stay off the thrown-error path, so
-they never light up error dashboards or page an on-call engineer.
+That separation has a practical payoff. Ordinary "no" answers stay off the thrown-error path.
+They never light up error dashboards or page an on-call engineer.
 
 <Callout type="warning">
   Don't reach for a `try`/`catch` to handle an empty balance or a duplicate
-  order. Those come back as `rejected` outcomes, and a `catch` will never see
-  them. Branch on `result.status` instead, and keep `catch` for the genuine
+  order. Those come back as `rejected` outcomes. A `catch` will never see
+  them. Branch on `result.status` instead. Keep `catch` for the genuine
   faults.
 </Callout>
 
 `ERROR_CODES` also holds deeper safety faults you won't normally trigger from a well-formed request:
 `LEDGER.OVERDRAFT`, `CHAIN.BROKEN`, `LEDGER.COMMINGLING`, and others. Those are last-resort
-backstops deep in the posting and integrity paths; reaching one means an invariant was about to
+backstops deep in the posting and integrity paths. Reaching one means an invariant was about to
 break.
 
 ## Troubleshooting
 
 ### I get `duplicate` but I only submitted once
 
-The key was minted from something two different actions share — a user id, a SKU, a template string that never varies. The first action claimed it; every later action replays that recorded outcome. Mint the key from the action's own identity:
+The key was minted from something two different actions share, such as a user id, a SKU, or a template string that never varies. The first action claimed it. Every later action replays that recorded outcome. Mint the key from the action's own identity:
 
 ```ts
 const idempotencyKey = `ord_${order.id}`; // unique per order, stable per retry
@@ -207,15 +215,15 @@ const idempotencyKey = `ord_${order.id}`; // unique per order, stable per retry
 
 ### My code throws instead of getting a `rejected` outcome
 
-Then it wasn't a decline — the request itself was broken before any business question was asked. The two usual suspects: the `actor` is a `user` acting on an account they don't own (`AUTH.UNAUTHORIZED`), or a malformed payload (`OP.MALFORMED`, e.g. a blank key). Rejections are reserved for valid requests the economy declines; see [rejected versus thrown](#rejected-versus-thrown) above and [actors & authorization](/economy/concepts/actors-and-authorization/).
+Then it wasn't a decline. The request itself was broken before any business question was asked. Two causes are the usual suspects: the `actor` is a `user` acting on an account they don't own (`AUTH.UNAUTHORIZED`), or the payload is malformed (`OP.MALFORMED`, e.g. a blank key). Rejections are reserved for valid requests the economy declines. See [rejected versus thrown](#rejected-versus-thrown) above and [actors & authorization](/economy/concepts/actors-and-authorization/).
 
 ## The catalog, live
 
-Every code in the table can be produced on demand, and each block below prints the reason
+Every code in the table can be produced on demand. Each block below prints the reason
 verbatim plus the exact `RejectionDetail` it carries. Run them as they are, or edit the figures
 and run again.
 
-The classic first: an underfunded spend, declined with the funds gate's own numbers.
+The classic comes first: an underfunded spend, declined with the funds gate's own numbers.
 
 <Runnable name="rejection" html={rejectionHtml} />
 
@@ -225,22 +233,22 @@ double-book:
 
 <Runnable name="rejection-records" html={rejectionRecordsHtml} />
 
-The three payout gates in the order `requestPayout` checks them — `BELOW_MINIMUM`,
-`PAYOUT_TOO_SOON`, `PAYEE_UNVERIFIED` — on an economy built with a 100-credit minimum, a
-seven-day gap, and a payee directory that has cleared only one seller:
+The next block runs the three payout gates in the order `requestPayout` checks them:
+`BELOW_MINIMUM`, `PAYOUT_TOO_SOON`, `PAYEE_UNVERIFIED`. The economy is built with a
+100-credit minimum, a seven-day gap, and a payee directory that has cleared only one seller:
 
 <Runnable name="rejection-payout-gates" html={rejectionPayoutGatesHtml} />
 
-`FUNDS_IMMATURE`, from giving card credit a three-day
-[holding window](/economy/concepts/credit-maturity/) — the money is in the wallet, and the
+Next is `FUNDS_IMMATURE`, produced by giving card credit a three-day
+[holding window](/economy/concepts/credit-maturity/). The money is in the wallet, and the
 detail says when it clears:
 
 <Runnable name="rejection-maturity" html={rejectionMaturityHtml} />
 
-`ECONOMY_PAUSED`, inside a live maintenance window — the user's write waits, the system's
-settlement does not:
+Then comes `ECONOMY_PAUSED`, inside a live maintenance window. The user's write waits, and
+the system's settlement does not:
 
 <Runnable name="rejection-paused" html={rejectionPausedHtml} />
 
-That leaves `RISK_DENIED`, which runs live where the velocity window is explained: on the
+That leaves `RISK_DENIED`. Its live block runs where the velocity window is explained, on the
 [spend velocity](/economy/concepts/spend-velocity/) page.

@@ -5,6 +5,7 @@ curl -s https://economy.example/submit \
     "idempotencyKey": "promo_2026_06_27_usr_buyer",
     "actor": { "kind": "system", "service": "marketing" },
     "userId": "usr_buyer",
-    "amount": "CREDIT:5.00",
+    "amount": "CREDIT:240.00",
     "expiresAt": 1798761600000
   }'
+# → { "status": "committed", "transaction": { "id": "txn_…", … } }
