@@ -20,14 +20,28 @@ import { describe, expect, test } from 'vitest';
 const REPO_ROOT = resolve(__dirname, '../../..');
 const API_OUT = join(REPO_ROOT, 'docs');
 
-// A subpath's module page is its source path with '/' → '_', minus the extension:
-// './worker' → src/worker/index.ts → src_worker.html.
+// Each entry point declares its module name (its bare import subpath) in a file-level
+// @module comment; the emitted page is that name with '/' → '_'. This table is the contract:
+// a new exports-map subpath must pick a name here and in its entry file.
+const MODULE_NAMES: Record<string, string> = {
+  'src/index.ts': 'economy-lab',
+  'src/ports.ts': 'ports',
+  'src/adapters/index.ts': 'adapters',
+  'src/client.ts': 'client',
+  'src/wire-contract.ts': 'contract',
+  'src/worker/index.ts': 'worker',
+  'src/server.ts': 'server',
+  'src/netting.ts': 'netting',
+  'src/supervisor/index.ts': 'supervisor',
+  'src/store-kit.ts': 'store-kit',
+  'src/sql-kit.ts': 'sql-kit',
+  'test/conformance/index.ts': 'testing',
+};
+
 function modulePageOf(sourcePath: string): string {
-  return sourcePath
-    .replace(/^\.\/dist\//, '')
-    .replace(/\.d\.ts$/, '')
-    .replace(/\/index$/, '')
-    .replace(/\//g, '_');
+  const name = MODULE_NAMES[sourceFileOf(sourcePath)];
+  if (!name) throw new Error(`no module name declared for entry point ${sourcePath}`);
+  return name.replace(/\//g, '_');
 }
 
 // The entry's source file for an exports-map types target: './dist/src/index.d.ts' → 'src/index.ts'.
@@ -56,10 +70,16 @@ const renderedSymbols = new Set(
 
 // Textual export parse — named re-export blocks plus direct declarations — so the library's
 // sources stay out of this app's TypeScript program. None of the entry points uses `export *`.
+//
+// Comments are cut from a block before it is split. An export block is allowed to carry them, and
+// splitting on commas without cutting them first turns a comment into an export name — which
+// reports as a symbol with no rendered page, naming the comment's own text.
 function exportedNames(sourceFile: string): string[] {
   const text = readFileSync(join(REPO_ROOT, sourceFile), 'utf8');
+  const uncommented = (block: string) =>
+    block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
   return [...text.matchAll(/^export (?:type )?\{([\s\S]*?)\}/gm)]
-    .flatMap((block) => (block[1] ?? '').split(','))
+    .flatMap((block) => uncommented(block[1] ?? '').split(','))
     .map((name) => name.replace(/^\s*type\s+/, '').trim())
     .filter(Boolean)
     .map((name) => name.split(' as ').pop()?.trim() ?? name)

@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { docBySlug, docSchema, docs } from '~/content.ts';
+import { docBySlug, docSchema, docs, docsInSection } from '~/content.ts';
 
 // The slug contract: economy-lab's source links here via @see {DOCS_BASE_URL}/<slug>,
 // section-rooted under economy/. Every one must resolve, or an inbound link dangles.
@@ -57,7 +57,7 @@ const CONTRACT = [
     'configuration',
     'performance',
   ].map((s) => `economy/reference/${s}`),
-  ...['signer', 'processor', 'rates', 'pricing', 'storage', 'messaging'].map(
+  ...['signer', 'processor', 'rates', 'pricing', 'catalog', 'storage', 'messaging'].map(
     (s) => `economy/ports/${s}`,
   ),
   'economy/scope-and-non-goals',
@@ -69,10 +69,27 @@ describe('slug contract', () => {
     expect(missing).toEqual([]);
   });
 
-  it('has 42 leaf pages, all under the economy/ section root', () => {
-    expect(CONTRACT).toHaveLength(42);
-    expect(docs.length).toBeGreaterThanOrEqual(42);
+  it('has 43 leaf pages, all under the economy/ section root', () => {
+    expect(CONTRACT).toHaveLength(43);
+    expect(docs.length).toBeGreaterThanOrEqual(43);
     expect(docs.every((d) => d.slug.startsWith('economy/'))).toBe(true);
+  });
+});
+
+describe('ports section', () => {
+  // Every seam on the Ports bag with a page of its own, in sidebar order. A port added to the
+  // bag earns a row here; a page dropping out of the section is a broken seam story.
+  it('carries a page per documented seam, catalog included', () => {
+    expect(docsInSection('ports').map((d) => d.slug)).toEqual([
+      'economy/ports/packages',
+      'economy/ports/signer',
+      'economy/ports/processor',
+      'economy/ports/rates',
+      'economy/ports/pricing',
+      'economy/ports/catalog',
+      'economy/ports/storage',
+      'economy/ports/messaging',
+    ]);
   });
 });
 

@@ -10,9 +10,9 @@
  */
 
 // Every inline <ApiLink> and frontmatter `apiRefs` entry must resolve into the generated TypeDoc
-// output: the page file exists under docs/, and a `#member` anchor's id is present in it. TypeDoc
-// regenerates from this same tree, so a failure here means a symbol was renamed or an entry point
-// dropped — not a stale pin. Run `npm run docs:api` first if docs/ is absent.
+// output: the page file exists under docs/, and a `#member` anchor's id is present in it. A
+// failure here means a symbol was renamed or an entry point dropped, never a stale pin — the
+// globalSetup in vitest.config.ts refuses the run when docs/ is behind the source it documents.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'vitest';
