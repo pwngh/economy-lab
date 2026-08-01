@@ -1,0 +1,61 @@
+{
+  "name": "@pwngh/economy-adapters",
+  "version": "0.1.0",
+  "description": "Mount an Economy app on your web framework",
+  "license": "MIT",
+  "author": "Preston Neal",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "default": "./dist/express.js"
+    },
+    "./fastify": {
+      "types": "./dist/fastify.d.ts",
+      "default": "./dist/fastify.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pwngh/economy-lab.git",
+    "directory": "packages/adapters"
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist",
+    "src",
+    "demos",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "tsc -p tsconfig.check.json",
+    "pretest": "tsc -p . --noEmit",
+    "test": "node ../../scripts/check-package-fresh.ts && node --import tsx --test-timeout=600000 --test test/*.test.ts",
+    "matrix": "node --import tsx scripts/matrix.ts",
+    "prepublishOnly": "npm run build && npm run check && npm test"
+  },
+  "dependencies": {
+    "@pwngh/economy-core": "^0.1.0"
+  },
+  "devDependencies": {
+    "@pwngh/economy-lab": "file:../..",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "express": "^4.21.0",
+    "fastify": "^5.0.0",
+    "hono": "^4.6.0",
+    "tsx": "^4.19.0",
+    "typescript": "^6.0.3"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/pwngh/economy-lab/tree/main/packages/adapters#readme"
+}
