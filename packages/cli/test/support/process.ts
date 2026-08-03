@@ -90,6 +90,68 @@ export const runSync = (
     timeout: SYNC_BOUND_MS,
   });
 
+/** The fixture that runs one verb with both streams injected. See {@link runInjected}. */
+const INJECTED = new URL('./injected.ts', import.meta.url).pathname;
+
+/** What the injected-streams fixture reports on fd 3: the verb's exit, and what each sink held. */
+export interface Injected {
+  readonly code: number;
+  readonly out: string;
+  readonly err: string;
+}
+
+export interface InjectedRun {
+  /** The real stdout of the run, which a verb handed a sink has no business writing to. */
+  readonly stdout: string;
+  /** The real stderr, held to the same. */
+  readonly stderr: string;
+  /** The fixture's own report, off both streams under test. */
+  said(): Injected;
+}
+
+/**
+ * One verb, run with both streams injected, in a process whose two real streams the caller owns
+ * outright: {@link childEnv} drops NODE_TEST_CONTEXT, so no reporter writes here and anything on
+ * either stream came from the verb itself.
+ *
+ * In-process this claim cannot be made. node:test reports a file's results by writing event
+ * frames to that process's stdout, from a stream inside the runner a test has no way to drain,
+ * so a swapped `process.stdout.write` captures the runner alongside the verb.
+ *
+ * `LEAK` names a write to a real stream — `stdout` or `stderr` — so a caller can watch its own
+ * assertions fire against the leak they exist to catch.
+ */
+export function runInjected(
+  args: string[],
+  cwd: string,
+  env: Record<string, string> = {},
+): InjectedRun {
+  // fd 3 is the fixture's report: a run that spoke on stdout or stderr instead would be
+  // indistinguishable from the leak this is here to rule out.
+  const run = spawnSync(
+    process.execPath,
+    ['--import', TSX, INJECTED, ...args],
+    {
+      cwd,
+      encoding: 'utf8',
+      env: childEnv(env),
+      timeout: SYNC_BOUND_MS,
+      stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+    },
+  );
+  if (run.status !== 0) {
+    throw new Error(
+      `the injected-streams fixture exited ${run.status}, signal ${run.signal}\n` +
+        `stdout:\n${run.stdout}\nstderr:\n${run.stderr}`,
+    );
+  }
+  return {
+    stdout: run.stdout,
+    stderr: run.stderr,
+    said: () => JSON.parse(run.output[3] as string) as Injected,
+  };
+}
+
 /** Detached, so `stop` can signal the whole group and reach a re-exec'd grandchild. */
 export const runLive = (
   args: string[],

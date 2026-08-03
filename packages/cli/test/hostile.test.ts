@@ -158,7 +158,7 @@ test('no test in this package hands a child the machine environment', () => {
     'a test file arrived or left — add it here, and route any spawn it makes through runSync',
   );
   const sources = new Map(
-    [...files, 'support/process.ts'].map((name) => [
+    [...files, 'support/injected.ts', 'support/process.ts'].map((name) => [
       name,
       readFileSync(join(HERE, name), 'utf8'),
     ]),
@@ -185,6 +185,7 @@ test('no test in this package hands a child the machine environment', () => {
     'honesty.test.ts', // fixture-module source, and the worker undo test reads one name back
     'hostile.test.ts', // poisons and restores AMBIENT above
     'live.test.ts', // the same, for the live verbs
+    'support/injected.ts', // reads LEAK, the name that asks it to write to a real stream
     'support/process.ts', // childEnv, reading the three machine names by name
   ]);
   // An empty result passes while examining nothing, so the pattern is turned on a sample carrying

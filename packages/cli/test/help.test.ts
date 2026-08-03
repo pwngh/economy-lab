@@ -26,9 +26,18 @@ import {
   flagForm,
   parse,
 } from '../src/lib/parse-args.js';
-import { PKG, runSync, withoutSelectedBackends } from './support/process.js';
+import {
+  PKG,
+  runInjected,
+  runSync,
+  withoutSelectedBackends,
+} from './support/process.js';
 
 const run = (args: string[]) => runSync(args, PKG);
+
+/** One verb run with both streams injected, in a process whose real streams this test owns. */
+const injected = (args: string[], env: Record<string, string> = {}) =>
+  runInjected(args, PKG, env);
 
 /** The committed rendering of every help page. See {@link helpPages} for how to regenerate it. */
 const GOLDEN = join(import.meta.dirname, 'fixtures', 'help.golden.txt');
@@ -45,10 +54,10 @@ function sink(): { write(text: string): boolean; text(): string } {
   };
 }
 
-// The real console and the real process streams, held silent for one call, so "the streams
-// are injectable" is proved rather than assumed.
 // This helper captures and restores console.log rather than printing to it; no-console reads
-// those references as prints, so the ban is lifted for the swap and put back after it.
+// those references as prints, so the ban is lifted for the swap and put back after it. It stops
+// at the console: node:test writes this file's own result frames to the real streams, so the
+// other half of the claim is held where nothing else writes them — see {@link runInjected}.
 /* eslint-disable no-console */
 async function offConsole<T>(
   body: () => Promise<T>,
@@ -56,31 +65,25 @@ async function offConsole<T>(
   const leaked: string[] = [];
   const realLog = console.log;
   const realError = console.error;
-  const realOut = process.stdout.write.bind(process.stdout);
-  const realErr = process.stderr.write.bind(process.stderr);
   console.log = (...a: unknown[]) => {
     leaked.push(`console.log ${String(a[0])}`);
   };
   console.error = (...a: unknown[]) => {
     leaked.push(`console.error ${String(a[0])}`);
   };
-  process.stdout.write = ((c: string) => {
-    leaked.push(`stdout ${String(c)}`);
-    return true;
-  }) as never;
-  process.stderr.write = ((c: string) => {
-    leaked.push(`stderr ${String(c)}`);
-    return true;
-  }) as never;
   try {
     return { value: await body(), leaked };
   } finally {
     console.log = realLog;
     console.error = realError;
-    process.stdout.write = realOut;
-    process.stderr.write = realErr;
   }
 }
+
+/** What a verb that ignored its sinks would do, so the guard above can be watched to fire. */
+const printToConsole = (): void => {
+  console.log('a report');
+  console.error('a refusal');
+};
 /* eslint-enable no-console */
 
 const sampleArgv = (verb: string, flag: (typeof FLAGS)[number]): string[] =>
@@ -329,11 +332,12 @@ test('the streams are injectable: a report verb writes to the sink and never to 
   );
   assert.equal(value, 0, err.text());
   assert.match(out.text(), /seams/, 'the report landed in the sink');
-  assert.deepEqual(
-    leaked,
-    [],
-    'nothing reached the real console or the real streams',
-  );
+  assert.deepEqual(leaked, [], 'nothing reached the real console');
+});
+
+test('offConsole holds what reaches the real console', async () => {
+  const { leaked } = await offConsole(async () => printToConsole());
+  assert.deepEqual(leaked, ['console.log a report', 'console.error a refusal']);
 });
 
 // The verbs that boot: their refusals ran through console.error until the streams were
@@ -350,11 +354,7 @@ test('the streams are injectable: a service verb refuses into the sink, not the 
     assert.equal(value, 1);
     assert.match(err.text(), /economy dev is the dev posture/);
     assert.equal(out.text(), '');
-    assert.deepEqual(
-      leaked,
-      [],
-      'nothing reached the real console or the real streams',
-    );
+    assert.deepEqual(leaked, [], 'nothing reached the real console');
   } finally {
     if (held === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = held;
@@ -369,10 +369,33 @@ test('serve refuses into the sink the same way', async () => {
   );
   assert.equal(value, 1);
   assert.match(err.text(), /economy serve is the production posture/);
-  assert.deepEqual(
-    leaked,
-    [],
-    'nothing reached the real console or the real streams',
+  assert.deepEqual(leaked, [], 'nothing reached the real console');
+});
+
+test('the streams are injectable: neither real stream is written at all', () => {
+  const report = injected(['check']);
+  const said = report.said();
+  assert.equal(said.code, 0, said.err);
+  assert.match(said.out, /seams/, 'the report landed in the sink');
+  assert.equal(report.stdout, '', 'the real stdout was never written');
+  assert.equal(report.stderr, '', 'the real stderr was never written');
+
+  const refusal = injected(['serve']);
+  const refused = refusal.said();
+  assert.equal(refused.code, 1);
+  assert.match(refused.err, /economy serve is the production posture/);
+  assert.equal(refusal.stdout, '', 'the real stdout was never written');
+  assert.equal(refusal.stderr, '', 'the real stderr was never written');
+});
+
+test('a write to either real stream is seen', () => {
+  assert.match(
+    injected(['check'], { LEAK: 'stdout' }).stdout,
+    /leaked to the real stdout/,
+  );
+  assert.match(
+    injected(['check'], { LEAK: 'stderr' }).stderr,
+    /leaked to the real stderr/,
   );
 });
 

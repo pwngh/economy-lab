@@ -277,6 +277,7 @@ export default tseslint.config(
       'packages/*/src/bin.ts',
       'packages/*/src/cli-entry.ts',
       'packages/*/test/support/entry.ts',
+      'packages/*/test/support/injected.ts',
       'packages/*/test/support/dist-entry.js',
       'packages/*/scripts/**/*.ts',
     ],

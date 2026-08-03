@@ -268,6 +268,8 @@ const SYNC_CALL_SITES = [
   // Twice: the strip-types recovery run, and the taken-port refusal under a Deno stand-in.
   'packages/cli/test/dev-serve.test.ts',
   'packages/cli/test/dev-serve.test.ts',
+  // Twice: the verb run through the shipped entry, and the verb run with both streams injected.
+  'packages/cli/test/support/process.ts',
   'packages/cli/test/support/process.ts',
   'packages/ui/test/invocation.test.tsx',
   'test/acceptance/harness.ts',
@@ -349,7 +351,7 @@ test('no bound inside a test outlives the file bound that cancels the file first
     }
   }
   assert.deepEqual(unresolved, UNRESOLVED_BOUNDS);
-  assert.equal(examined, 38, `examined ${examined} declared bounds`);
+  assert.equal(examined, 39, `examined ${examined} declared bounds`);
   assert.equal(resolved, examined - unresolved.length);
 });
 
