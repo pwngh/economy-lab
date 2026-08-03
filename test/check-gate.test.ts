@@ -304,7 +304,7 @@ test('ci.yml runs the table and nothing else', () => {
       `${id} is neither a tier nor a step in the table`,
     );
   }
-  assert.equal(runs.length, 25, 'ci.yml holds a different number of steps');
+  assert.equal(runs.length, 24, 'ci.yml holds a different number of steps');
 });
 
 /**

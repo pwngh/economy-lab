@@ -18,8 +18,11 @@ concurrency:
 # installs, the two gitignored emits and the rig schema. `test/check-gate.test.ts` holds both ends,
 # and the four tiers between them cover the whole table.
 jobs:
-  # The rig-backed suites skip the engines they cannot reach, so this job stays green with no
-  # services and answers a pull request in the time the static tier takes to fail.
+  # Static only, and deliberately: this job supplies no services, and the package fan-out counts
+  # an unreachable engine as a failure rather than a skip — `needsEngine` suites report
+  # "a backend is unreachable, so this leg proved nothing". That is the right strictness, so the
+  # tier that needs databases runs where the databases are. `matrix` invokes `unit` with real
+  # postgres and mysql; running it here as well could only ever be red.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -35,7 +38,6 @@ jobs:
       - run: npm run build
       - run: npm run build:packages
       - run: npm run check static
-      - run: npm run check unit
 
   # The two React Router apps live outside the root lint/typecheck gate (their own toolchains),
   # and the acceptance tier names their gates without moving them out of apps/*/scripts/.
