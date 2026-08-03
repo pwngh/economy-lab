@@ -22,7 +22,7 @@ jobs:
   # an unreachable engine as a failure rather than a skip — `needsEngine` suites report
   # "a backend is unreachable, so this leg proved nothing". That is the right strictness, so the
   # tier that needs databases runs where the databases are. `matrix` invokes `unit` with real
-  # postgres and mysql; running it here as well could only ever be red.
+  # postgres, mysql and redis; running it here as well could only ever be red.
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -33,10 +33,9 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      # dist/ and packages/*/dist are gitignored, so a fresh checkout carries neither. The static
-      # tier reports a stale emit rather than rebuilding one, which is why the build is here.
       - run: npm run build
       - run: npm run build:packages
+      - run: npm run docs:api
       - run: npm run check static
 
   # The two React Router apps live outside the root lint/typecheck gate (their own toolchains),
@@ -66,8 +65,6 @@ jobs:
 
   # The differential matrix: memory, postgres, mysql and http proven byte-identical in CI. It runs
   # the unit tier as well, so the root suite and the package fan-out meet live engines rather than
-  # skipping past them. timeout-minutes bounds a deadlock or stuck connection to a clean failure
-  # instead of the default six-hour ceiling.
   matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -101,9 +98,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgres://economy:economy@localhost:5432/economy_lab
       MYSQL_TEST_URL: mysql://root:economy@localhost:3306/economy_lab
+      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
