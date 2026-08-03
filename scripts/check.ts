@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 import { BUILDS_DATED, assertBuildsFresh } from './check-dist-fresh.ts';
 import { describeReach, reachesDist } from './support/dist-reach.ts';
+import { failureReport } from '../test/support/tap-failures.ts';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
@@ -743,7 +744,8 @@ function execute(step: CheckStep): Outcome {
 
   if (run.status !== 0) {
     process.stdout.write(`FAIL ${note}\n`);
-    console.error(output.slice(-4000));
+    const said = ACCOUNTED.exec(output);
+    console.error(failureReport(output, said ? Number(said[4]) : 0));
     return { id: step.id, state: 'failed', note };
   }
 
