@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import '#test/support/dist-guard.ts';
 
 import { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
-import { runRateLimiterConformance } from '#test/conformance/rate-limit.ts';
+import { runRateLimiterConformance } from '@pwngh/economy-conformance';
 import { fixedClock } from '#test/support/capabilities.ts';
 
 // One clock behind every limiter the run builds, so `elapse` moves the window of whichever limiter

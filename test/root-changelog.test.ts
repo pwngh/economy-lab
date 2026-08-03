@@ -81,7 +81,7 @@ test('every @pwngh specifier the root CHANGELOG names is one that resolves', () 
     }
     assert.ok(opens, `names ${spec}, which ${bare} does not export`);
   }
-  assert.equal(seen, 8, `read ${seen} @pwngh specifiers`);
+  assert.equal(seen, 10, `read ${seen} @pwngh specifiers`);
 });
 
 // ---------------------------------------------------------------------------
@@ -119,6 +119,7 @@ const REMOVED_SUBPATHS = [
   './engines/mysql',
   './engines/mysql-mariadb',
   './ops',
+  './testing',
 ];
 
 test('a subpath the root CHANGELOG names as removed is gone, and did ship', () => {
@@ -136,7 +137,7 @@ test('a subpath the root CHANGELOG names as removed is gone, and did ship', () =
       `the CHANGELOG says ${sub} was removed, and 0.7.0 never published it`,
     );
   }
-  assert.equal(REMOVED_SUBPATHS.length, 6);
+  assert.equal(REMOVED_SUBPATHS.length, 7);
   // The removals and the map have to account for each other: 15 published, 6 gone, 4 new.
   assert.deepEqual(
     PUBLISHED_EXPORTS.filter((s) => !LAB_EXPORTS.includes(s)).sort(),
@@ -156,7 +157,7 @@ test('every other lab subpath the root CHANGELOG names is on the exports map', (
       `names the subpath ${span}, which the exports map does not carry`,
     );
   }
-  assert.equal(seen, 9, `read ${seen} live subpaths`);
+  assert.equal(seen, 8, `read ${seen} live subpaths`);
 });
 
 // ---------------------------------------------------------------------------

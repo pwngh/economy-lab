@@ -113,6 +113,10 @@ const crossBoundary = <T extends { family: string }>(rows: readonly T[]): T[] =>
  */
 const NAMES_ALLOWED = new Map<string, string>([
   [
+    'collect',
+    'coincidental: the conformance suite drains an async iterable into an array, the http server drains one while mapping each row through a projection, and neither could use the other without growing a parameter it has no caller for',
+  ],
+  [
     'add',
     'money delegates to the lab in one line; the second lab entry is TxHeads.add, a Map write',
   ],
@@ -328,6 +332,50 @@ const VALUES_ALLOWED = new Map<string, string>([
  */
 const PAIRS_ALLOWED = new Map<string, string>([
   [
+    'test/conformance/claim-lock-lifetime.race.test.ts#arrivesWithin <-> packages/conformance/src/store.ts#settlesWithin',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/adapters/http.test.ts#outboxRow <-> packages/conformance/src/store.ts#outboxRow',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/conformance/invariants.adversarial.test.ts#fundSpendable <-> packages/conformance/src/store.ts#fundSpendable',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/adapters/postgres.test.ts#outboxMessage <-> packages/conformance/src/store.ts#outboxRow',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/adapters/sqs.test.ts#sampleEvent <-> packages/conformance/src/dispatcher.ts#sampleEvent',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/worker/poison-kill.test.ts#inboxRow <-> packages/conformance/src/store.ts#inboxRow',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/conformance/claim-contention.race.test.ts#outboxRow <-> packages/conformance/src/store.ts#outboxRow',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/conformance/claim-lock-lifetime.race.test.ts#outboxRow <-> packages/conformance/src/store.ts#outboxRow',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/acceptance/smoke.test.ts#sampleEvent <-> packages/conformance/src/dispatcher.ts#sampleEvent',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/support/sweeps.ts#balancedPosting <-> packages/conformance/src/store.ts#fundSpendable',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
+    'test/property.test.ts#program <-> packages/conformance/src/rate-limit.ts#verdicts',
+    'the harness moved to packages/conformance, so fixture builders it has always shared shape with are cross-tree now rather than same-tree; neither side can import from the other, and the row shapes are the contract',
+  ],
+  [
     'src/bytes.ts#toBase64Url <-> packages/receipt/src/lib/receipt-signing.ts#encodeBase64Url',
     'packages/receipt is zero-dependency by a pinned test and structurally cannot import the lab; held identical by test/dedupe-receipt.test.ts',
   ],
@@ -371,7 +419,7 @@ const PAIRS_FILED = new Map<string, string>([
     'Q161: same cause one port over — the Cache contract runner ships, the fake it runs against does not',
   ],
   [
-    'test/conformance/rate-limit.ts#verdictOf <-> packages/redis/test/redis.test.ts#readVerdict',
+    'packages/conformance/src/rate-limit.ts#verdictOf <-> packages/redis/test/redis.test.ts#readVerdict',
     'Q161: the kit reduces a denial to whether its wait falls inside the window, and packages/redis restated that rule to compare against the same table',
   ],
   [
@@ -674,7 +722,7 @@ test('no name is declared in two trees, unless it is admitted with a reason', ()
     'a name is declared in two trees with no entry in NAMES_ALLOWED',
   );
   assert.equal(found.length, NAMES_ALLOWED.size);
-  assert.equal(found.length, 21);
+  assert.equal(found.length, 22);
 });
 
 // An admission that outlives the thing it admits stops being a reason and becomes a hole.
@@ -695,7 +743,7 @@ test('every admitted name is still declared twice, and still carries a reason', 
       `${name} is admitted with no reason worth reading`,
     );
   }
-  assert.equal(NAMES_ALLOWED.size, 21);
+  assert.equal(NAMES_ALLOWED.size, 22);
 });
 
 // The store layer repeats itself by construction. Reported apart so it does not drown the axis
@@ -754,12 +802,14 @@ test('no body survives renaming into another tree, unless it is admitted or file
     'a body scores at or above its channel threshold across a package boundary with no entry in PAIRS_ALLOWED or PAIRS_FILED',
   );
   assert.equal(found.length, PAIRS_ALLOWED.size + PAIRS_FILED.size);
-  assert.equal(found.length, 10);
-  // The rigs are where nine of the ten live, and the channel earns its widening only if
+  assert.equal(found.length, 21);
+  // The rigs are where twenty of the twenty-one live, and the channel earns its widening only if
   // it is still reading them. Counted, so a walk that quietly lost the rig trees fails here too.
+  // Eleven arrived at once when the conformance harness became a package: fixture builders it had
+  // always shared a shape with went from same-tree to cross-tree without a line of either moving.
   assert.equal(
     crossBoundary(near.pairs).filter((pair) => pair.channel === 'rig').length,
-    9,
+    20,
   );
 
   // The line above is what catches an emptied candidate set: it demands the receipt pair be FOUND,
@@ -785,7 +835,7 @@ test('every admitted or filed pair still scores above its channel threshold', ()
       `${pair} is listed with no reason worth reading`,
     );
   }
-  assert.equal(PAIRS_ALLOWED.size, 5);
+  assert.equal(PAIRS_ALLOWED.size, 16);
   assert.equal(PAIRS_FILED.size, 5);
   // A filed pair names the entry that owns it, so the roster cannot become a quiet exemption.
   for (const [pair, reason] of PAIRS_FILED) {
@@ -898,7 +948,7 @@ test('the rig-side invariant families are still stated at every recorded site', 
 test('the engine twins are the family they are recorded as', () => {
   const twins = near.pairs.filter((pair) => pair.family === 'STORE-LAYER');
   assert.equal(twins.length, 20);
-  assert.equal(near.pairs.length, 30);
+  assert.equal(near.pairs.length, 41);
   for (const pair of twins) {
     assert.equal(pair.channel, 'shipped');
     assert.ok(pair.dice >= thresholdFor(pair.channel));

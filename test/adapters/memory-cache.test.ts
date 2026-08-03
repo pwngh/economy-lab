@@ -10,11 +10,12 @@
  * @license MIT
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { memoryCache } from '#src/adapters/memory-cache.ts';
-import { runCacheConformance } from '#test/conformance/cache.ts';
+import { runCacheConformance } from '@pwngh/economy-conformance';
 
 import type { Clock } from '#src/ports.ts';
 

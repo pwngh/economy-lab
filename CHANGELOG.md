@@ -93,6 +93,13 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   behind a slot that carries a `close`, so the framework releases what the module opened.
 - Breaking: the `./ops` subpath is `./supervisor` and exports the same 44 names, two of them
   renamed. `/api/modules/ops.html` redirects to the renamed module page.
+- Breaking: the `./testing` subpath is gone; `runStoreConformance`, `runCacheConformance`,
+  `runRateLimiterConformance`, `runDispatcherConformance`, `runProcessorConformance`,
+  `StoreConformanceOptions`, `DispatcherHarness` and `ProcessorHarness` are
+  `@pwngh/economy-conformance`, reached through `@pwngh/economy/conformance`. The lab compiles
+  only what it publishes, so no test file ships in its tarball.
+- `.` publishes `postEntry`, the validated posting write a conformance suite builds ledger state
+  with.
 - Breaking: `OpsRuntime` is `SupervisorRuntime` and `createOpsRuntime` is
   `createSupervisorRuntime` on `./supervisor`. The other 42 names are unchanged.
 - Breaking: the module flag `flags.ops` is `flags.supervisor`; `flags: { ops: true }` is refused
@@ -130,6 +137,11 @@ Notable changes to `@pwngh/economy-lab`, newest first. Dates are npm publish dat
   the lab depends on no money package. No published symbol or subpath moves.
 
 ### Fixed
+
+- `build:packages` links a workspace bin whose target did not exist at install time. `npm ci` runs
+  before the build, so a fresh checkout linked neither the `economy` bin nor `create-economy`.
+- The `check` workflow job runs the static tier only. It also ran the unit tier, which needs
+  postgres and mysql and counts an unreachable engine as a failure rather than a skip.
 
 - `createSupervisor` holds every `SupervisorConfig` knob to its bounds and throws `CONFIG.INVALID`
   at construction, naming the knob and its range. Out of bounds, a knob switched a detection

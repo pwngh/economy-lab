@@ -19,6 +19,7 @@
  * a funds rejection (risk passed, money failed) and a risk denial (the gate itself said no).
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 

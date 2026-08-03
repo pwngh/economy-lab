@@ -137,6 +137,7 @@
     "ownerOf": "value",
     "paginate": "value",
     "parseExport": "value",
+    "postEntry": "value",
     "preflight": "value",
     "promo": "value",
     "proveEconomy": "value",
@@ -545,17 +546,5 @@
     "unreachableDatabase": "value",
     "vectors": "value",
     "withTransientRetry": "value"
-  },
-  "./testing": {
-    "DispatcherHarness": "type",
-    "ProcessorHarness": "type",
-    "RateLimiterHarness": "type",
-    "StoreCapability": "type",
-    "StoreConformanceOptions": "type",
-    "runCacheConformance": "value",
-    "runDispatcherConformance": "value",
-    "runProcessorConformance": "value",
-    "runRateLimiterConformance": "value",
-    "runStoreConformance": "value"
   }
 }

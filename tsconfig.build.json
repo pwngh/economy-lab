@@ -5,9 +5,9 @@
     "declaration": true,
     "outDir": "dist",
     "rootDir": ".build-tmp",
-
     "allowImportingTsExtensions": false,
-    "rewriteRelativeImportExtensions": true
+    "rewriteRelativeImportExtensions": true,
+    "types": ["node"]
   },
-  "include": [".build-tmp/src/**/*.ts", ".build-tmp/test/conformance/**/*.ts"]
+  "include": [".build-tmp/src/**/*.ts"]
 }

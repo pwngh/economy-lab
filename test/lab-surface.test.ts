@@ -134,7 +134,7 @@ const BLIND_SPOTS = new Map([
   ],
   [
     'the two totals a report quotes, across a subpath key renamed with its symbols intact',
-    'both are sums over the map and a rename moves neither, so 12 / 535 reads the same on both sides of a breaking change. The key list below does fail and forces a regenerate — what is blind is the pair of numbers, and ./ops becoming ./supervisor on 2026-07-30 is the case (Q26)',
+    'both are sums over the map and a rename moves neither, so 11 / 526 reads the same on both sides of a breaking change. The key list below does fail and forces a regenerate — what is blind is the pair of numbers, and ./ops becoming ./supervisor on 2026-07-30 is the case (Q26)',
   ],
 ]);
 
@@ -148,7 +148,7 @@ const symbolCount = (roster: Roster) =>
 test('the exports map is the module subpaths plus one named non-module', () => {
   const keys = exportKeys(ROOT);
   const subpaths = moduleSubpaths(ROOT).map((entry) => entry.subpath);
-  assert.equal(subpaths.length, 12, `read ${subpaths.length} module subpaths`);
+  assert.equal(subpaths.length, 11, `read ${subpaths.length} module subpaths`);
   assert.equal(keys.length, subpaths.length + 1);
 
   const exempt = keys.filter((key) => !subpaths.includes(key));
@@ -168,7 +168,7 @@ test('every subpath carries exactly the roster the fixture pins', () => {
     assert.deepEqual(named, pinned[subpath], `${subpath}: ${REGENERATE}`);
   }
   // deepEqual over two empty rosters passes, so the count is what proves the probe read anything.
-  assert.equal(symbolCount(live), 535, `resolved ${symbolCount(live)} symbols`);
+  assert.equal(symbolCount(live), 526, `resolved ${symbolCount(live)} symbols`);
   assert.equal(symbolCount(live), symbolCount(pinned));
 });
 
@@ -184,13 +184,13 @@ test('the roster totals reconcile through the symbols on more than one route', (
   const shared = [...routes.values()].filter((on) => on.length > 1);
   const extra = shared.reduce((sum, on) => sum + on.length - 1, 0);
 
-  assert.equal(routes.size, 484, `${routes.size} distinct symbols`);
+  assert.equal(routes.size, 476, `${routes.size} distinct symbols`);
   assert.equal(
     shared.length,
     47,
     `${shared.length} symbols on more than one route`,
   );
-  assert.equal(extra, 51);
+  assert.equal(extra, 50);
   assert.equal(symbolCount(live), routes.size + extra);
 });
 
@@ -208,7 +208,7 @@ test('no symbol is a value on one route and a type on another', () => {
       kinds.set(name, kind);
     }
   }
-  assert.equal(kinds.size, 484);
+  assert.equal(kinds.size, 476);
 });
 
 // exports points at dist and never at src — a src-pointing map sends a consumer into the shipped
@@ -242,7 +242,7 @@ test('every subpath declares a built pair and names the source behind it', () =>
       `${entry.subpath} is exempted as publishing from outside src/ and publishes ${entry.source}`,
     );
   }
-  assert.equal(examined, 12, `read ${examined} subpaths`);
+  assert.equal(examined, 11, `read ${examined} subpaths`);
   assert.equal(OFF_SOURCE_SUBPATHS.size, 1);
 });
 
@@ -292,7 +292,7 @@ test('the three breaks this fixture cannot report are still the three it cannot 
   assert.deepEqual([...new Set(recorded)].sort(), ['type', 'value']);
   assert.equal(
     recorded.length,
-    535,
+    526,
     `read ${recorded.length} recorded symbols`,
   );
 
@@ -310,7 +310,7 @@ test('the three breaks this fixture cannot report are still the three it cannot 
   }
   assert.equal(
     publishedOnly.length,
-    6,
+    7,
     `${publishedOnly.length} subpaths are on published ${published.version} and gone from this tree`,
   );
   assert.equal(

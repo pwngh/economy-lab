@@ -13,10 +13,10 @@
 import { describe, test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { countedCases } from '#test/conformance/cases.ts';
-import { decodeAmount } from '#src/money.ts';
+import { countedCases } from './cases.js';
+import { decodeAmount } from '@pwngh/economy-lab';
 
-import type { PayoutProviderStatus, Processor } from '#src/ports.ts';
+import type { PayoutProviderStatus, Processor } from '@pwngh/economy-lab/ports';
 
 /**
  * A Processor conformance run needs these factories from the host. Each factory produces a

@@ -13,9 +13,9 @@
 import { describe, test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { countedCases } from '#test/conformance/cases.ts';
+import { countedCases } from './cases.js';
 
-import type { Cache } from '#src/ports.ts';
+import type { Cache } from '@pwngh/economy-lab/ports';
 
 /**
  * Runs the shared {@link Cache} contract that every adapter must satisfy. The suite runs against

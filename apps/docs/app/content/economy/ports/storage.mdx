@@ -80,10 +80,10 @@ A port is only useful if every adapter behaves the same way. economy-lab pins th
 
 The same posting, the same overdraft rejection, and the same hash chain come back from each backend, so the choice of backend is an infrastructure decision, not a behavioral one.
 
-The suite is published (`@pwngh/economy-lab/testing`). The primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — are published too, as [`@pwngh/economy-lab/store-kit`](/api/modules/store-kit.html). A third-party store built on both needs nothing the package doesn't export. Its whole test file is the highlighted line:
+The suite is published (`@pwngh/economy-conformance`). The primitives a conforming implementation computes with — the chain hash, balance deltas, the canonical ordering, the wire codecs — are published too, as [`@pwngh/economy-lab/store-kit`](/api/modules/store-kit.html). A third-party store built on both needs nothing the package doesn't export. Its whole test file is the highlighted line:
 
 ```ts filename=test/my-store.conformance.test.ts lines=[3]
-import { runStoreConformance } from '@pwngh/economy-lab/testing';
+import { runStoreConformance } from '@pwngh/economy-conformance';
 
 runStoreConformance('my-store', () => myStore());
 // the identical test bodies memory, Postgres, and MySQL pass

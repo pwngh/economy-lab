@@ -399,7 +399,7 @@ describe('Amounts Read Back Are Refused Unless They Are Canonical', () => {
     assert.ok(!walksAnOperation(' * out = encodeAmounts(entry.operation)'));
     assert.equal(
       SHIPPED_ROOTS.length,
-      18,
+      19,
       `walked ${SHIPPED_ROOTS.length} source roots`,
     );
     const walked = SHIPPED_ROOTS.flatMap(sourcesUnder);

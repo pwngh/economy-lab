@@ -38,6 +38,7 @@
     "ioredis": "^5.0.0"
   },
   "devDependencies": {
+    "@pwngh/economy-conformance": "^0.1.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^6.0.3"

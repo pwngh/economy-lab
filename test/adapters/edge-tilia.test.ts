@@ -9,6 +9,7 @@
  * @license MIT
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -29,7 +30,7 @@ import { ERROR_CODES } from '#src/errors.ts';
 import { requestPayout } from '#src/operations/requestPayout.ts';
 import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { runProcessorConformance } from '#test/conformance/processor.ts';
+import { runProcessorConformance } from '@pwngh/economy-conformance';
 import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 import { credit, sagaAnchor, usd } from '#test/support/builders.ts';

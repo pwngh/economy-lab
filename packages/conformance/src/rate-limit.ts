@@ -15,11 +15,11 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
-import { countedCases } from '#test/conformance/cases.ts';
-import { ERROR_CODES } from '#src/errors.ts';
+import { countedCases } from './cases.js';
+import { ERROR_CODES } from '@pwngh/economy-lab';
 
-import type { RatePolicy } from '#src/adapters/rate-policy.ts';
-import type { RateLimiter, RateVerdict } from '#src/ports.ts';
+import type { RatePolicy } from '@pwngh/economy-lab/adapters';
+import type { RateLimiter, RateVerdict } from '@pwngh/economy-lab/ports';
 
 /**
  * What a {@link RateLimiter} conformance run needs from the host. `make` builds a limiter over one
@@ -298,7 +298,7 @@ async function refusesAPolicyItCannotHonour(
  * sit in a job with no Redis provisioned.
  *
  * @example
- * import { runRateLimiterConformance } from '@pwngh/economy-lab/testing';
+ * import { runRateLimiterConformance } from '@pwngh/economy-conformance';
  * import { myRateLimiter } from './my-rate-limiter.js';
  *
  * runRateLimiterConformance('my-limiter', () => ({

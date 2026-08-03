@@ -11,8 +11,7 @@
     "src/netting.ts",
     "src/supervisor/index.ts",
     "src/store-kit.ts",
-    "src/sql-kit.ts",
-    "test/conformance/index.ts"
+    "src/sql-kit.ts"
   ],
   "out": "docs",
   "readme": "typedoc-readme.md",

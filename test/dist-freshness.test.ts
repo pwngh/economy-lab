@@ -120,7 +120,7 @@ test('the roster is the lab plus every workspace member that builds', () => {
     units.map((unit) => unit.name).sort(),
     ['@pwngh/economy-lab', ...building.map((member) => member.name)].sort(),
   );
-  assert.equal(units.length, 18, `read ${units.length} build units`);
+  assert.equal(units.length, 19, `read ${units.length} build units`);
   assert.equal(building.length, workspace.size);
   for (const unit of units) {
     assert.ok(
@@ -298,9 +298,12 @@ function population(
  * something — and cost real diagnosis time twice on 2026-07-31. The roster names which.
  */
 const LOADED = [
+  '@pwngh/economy-conformance',
+  '@pwngh/economy-conformance/internal',
   '@pwngh/economy-core',
+  '@pwngh/economy-lab/adapters',
   '@pwngh/economy-lab/sql-kit',
-  '@pwngh/economy-lab/testing',
+  '@pwngh/economy-lab/store-kit',
   '@pwngh/economy-money',
   '@pwngh/economy-mysql',
   '@pwngh/economy-mysql/mariadb',
@@ -344,6 +347,7 @@ test('every published specifier this suite loads was built from the source besid
     [...read.consumed].sort(),
     [
       '@pwngh/economy',
+      '@pwngh/economy-conformance',
       '@pwngh/economy-core',
       '@pwngh/economy-lab',
       '@pwngh/economy-money',
@@ -388,22 +392,16 @@ test('a specifier that does not resolve is named, not left out of the count', ()
   );
 });
 
-// The one root whose sources are allowed to have no output. If all of it starts emitting, the
-// exemption has stopped saying anything and should go.
-test('the closure exemption is live: test/support emits a strict part of itself', () => {
+// The lab compiles only what it publishes, so there is no root whose sources may go unemitted.
+// The exemption that used to sit here covered test/support, copied into the lab's compile for the
+// conformance suite to import; that suite is @pwngh/economy-conformance now and builds itself.
+test('no build root is exempt from emitting, because none is copied in for a closure', () => {
   const lab = buildUnits(ROOT)[0]!;
   assert.deepEqual(
     lab.roots.filter((root) => root.closureOnly).map((root) => root.sources),
-    ['test/support'],
+    [],
   );
-  const measured = checkUnits([lab], ROOT).units[0]!.roots.find(
-    (root) => root.sources === 'test/support',
-  )!;
-  assert.ok(measured.compared > 0, 'test/support emits nothing at all');
-  assert.ok(
-    measured.compared < measured.sourceCount * EMITTED.length,
-    'every file under test/support now emits, so the exemption covers nothing',
-  );
+  assert.ok(lab.roots.length > 0, 'the lab declares no build roots at all');
 });
 
 test('an output older than its source is refused, by path and with the command', () => {

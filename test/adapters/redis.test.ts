@@ -18,8 +18,8 @@ import '#test/support/dist-guard.ts';
 
 import { redisCache, redisRateLimiter } from '@pwngh/economy-redis';
 import { EconomyError } from '#src/errors.ts';
-import { runCacheConformance } from '#test/conformance/cache.ts';
-import { runRateLimiterConformance } from '#test/conformance/rate-limit.ts';
+import { runCacheConformance } from '@pwngh/economy-conformance';
+import { runRateLimiterConformance } from '@pwngh/economy-conformance';
 
 import type { RateLimiter } from '#src/ports.ts';
 

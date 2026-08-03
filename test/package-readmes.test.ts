@@ -133,7 +133,7 @@ const isDir = (path: string) =>
 // The message names the absent file, because the checks below read the README as content and
 // report an empty one as bad content — three complaints about headings that are not there.
 test('every package ships a README', () => {
-  assert.equal(packages.length, 17, `found ${packages.length} packages`);
+  assert.equal(packages.length, 18, `found ${packages.length} packages`);
   for (const p of packages)
     assert.ok(
       p.readme.length > 0,
@@ -145,7 +145,7 @@ test('every package ships a README', () => {
 // would pass every one of them in silence.
 test('a CHANGELOG is read down to the blocks still being written', () => {
   const changelogs = docs.filter((d) => d.label.endsWith('CHANGELOG'));
-  assert.equal(changelogs.length, 17, `found ${changelogs.length} CHANGELOGs`);
+  assert.equal(changelogs.length, 18, `found ${changelogs.length} CHANGELOGs`);
   assert.ok(
     changelogs.some((d) => d.text.length > 0),
     'every CHANGELOG read empty',
@@ -194,7 +194,7 @@ test('every @pwngh specifier a package document names is one that resolves', () 
   // Per document, not in total: one README naming forty specifiers satisfies a total while
   // every other README goes unread.
   const readmes = packages.filter((p) => p.readme);
-  assert.equal(readmes.length, 17, `read ${readmes.length} READMEs`);
+  assert.equal(readmes.length, 18, `read ${readmes.length} READMEs`);
   for (const p of readmes)
     assert.ok(
       (seenIn.get(`${p.name} README`) ?? 0) > 0,
@@ -264,7 +264,7 @@ test('every door in the manifest is named in the umbrella README', () => {
   // A door that stopped being read is a door that stopped being checked, so the count is the
   // check: every door landed in exactly one bucket, and an exemption for a door the manifest no
   // longer carries is never counted and shows up here as a shortfall.
-  assert.equal(examined, 23, `read ${examined} doors`);
+  assert.equal(examined, 24, `read ${examined} doors`);
   assert.equal(examined, doors().length);
   assert.equal(documented + exempted, examined);
   assert.equal(exempted, UNDOCUMENTED_DOORS.size);
@@ -329,7 +329,7 @@ test('each README installs the umbrella, never the package it documents', () => 
   }
   // A README with no `npm i` line at all reads as an empty roster and satisfies neither branch
   // above by accident, so the split is counted: every package but the written exemption.
-  assert.equal(checked, 16, `checked ${checked} install lines`);
+  assert.equal(checked, 17, `checked ${checked} install lines`);
   assert.equal(exempted, NO_INSTALL_LINE.size);
   // Against the READMEs that exist, not the packages: an absent one is the test above's to name.
   assert.equal(checked + exempted, packages.filter((p) => p.readme).length);
@@ -400,7 +400,7 @@ test('every @pwngh import in a package document resolves and names real exports'
   // floor: a floor set at a third of reality passes a bug that drops two thirds of the tree.
   assert.deepEqual(
     [resolved, checked],
-    [59, 91],
+    [61, 96],
     `resolved ${resolved} imports and checked ${checked} exported names`,
   );
 });
@@ -527,7 +527,7 @@ test('each README carries the house sections', () => {
     }
     checked += 1;
   }
-  assert.equal(checked, 17, `checked ${checked} READMEs`);
+  assert.equal(checked, 18, `checked ${checked} READMEs`);
 });
 
 /**
@@ -1213,7 +1213,7 @@ test('a CHANGELOG claim is swept until its block is dated, and never after', () 
 // of a shape this gate can settle is not allowed to go unregistered: that is the difference
 // between a stated subset and an accidental one.
 test('every claim-shaped sentence in every package document is registered', () => {
-  assert.equal(PROSE.length, 34, `swept ${PROSE.length} documents`);
+  assert.equal(PROSE.length, 36, `swept ${PROSE.length} documents`);
   assert.equal(
     PROSE.length,
     packages.filter((p) => p.readme).length +

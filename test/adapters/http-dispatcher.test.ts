@@ -9,14 +9,15 @@
  * @license MIT
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { httpDispatcher } from '#src/adapters/http-dispatcher.ts';
-import { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
+import { runDispatcherConformance } from '@pwngh/economy-conformance';
 
 import type { EconomyEvent } from '#src/ports.ts';
-import type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
+import type { DispatcherHarness } from '@pwngh/economy-conformance';
 
 const event: EconomyEvent = {
   id: 'evt_1',

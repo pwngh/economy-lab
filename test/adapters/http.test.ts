@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 
 import '#test/support/dist-guard.ts';
 
-import { runStoreConformance } from '#test/conformance/store.ts';
+import { runStoreConformance } from '@pwngh/economy-conformance';
 import { httpStore, createStoreServer } from '#src/adapters/http.ts';
 import { ERROR_CODES, EconomyError } from '#src/errors.ts';
 import { memoryStore } from '#src/adapters/memory.ts';

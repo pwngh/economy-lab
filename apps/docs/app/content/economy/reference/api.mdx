@@ -33,7 +33,6 @@ The full rendered surface for each import path is on the [reference](/api/).
 | [`@pwngh/economy-lab/netting`](/api/modules/netting.html)             | The in-instance netting session.                                                     |
 | [`@pwngh/economy-lab/supervisor`](/api/modules/supervisor.html)                     | The in-process operations supervisor: signal capture, incident detectors, guarded remediations, and the audit trail. |
 | [`@pwngh/economy-lab/store-kit`](/api/modules/store-kit.html)         | The primitives a custom `Store` implementation computes with.                        |
-| [`@pwngh/economy-lab/testing`](/api/modules/testing.html)        | The conformance harness for testing your own adapters.                               |
 
 ## How the surface is split
 
@@ -45,4 +44,4 @@ The main entry re-exports the **worker** and **server** constructors and their t
 
 The **supervisor** is an in-process library that the core never imports. To switch it off, leave it out of the composition. It observes only through the `meter` and `logger` ports. It remediates only through host-provided levers, and mandatory guardrails bound every remediation. [Ops & runbooks](/economy/ops/) owns the operational story.
 
-**store-kit** and **testing** are a pair. The conformance suite is the public invitation to bring your own `Store`. store-kit holds the primitives a conforming implementation computes with: the same chain hashes, balance deltas, orderings, and wire encodings the built-in engines compute.
+**store-kit** is what a conforming implementation computes with: the same chain hashes, balance deltas, orderings, and wire encodings the built-in engines compute. The suites that hold an implementation to the contract are their own package, `@pwngh/economy-conformance`, reached through `economy/conformance`.

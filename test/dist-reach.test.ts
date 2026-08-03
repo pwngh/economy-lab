@@ -275,14 +275,18 @@ const REACHING = [
   'test/acceptance/rigs.test.ts',
   'test/acceptance/smoke.test.ts',
   'test/adapters/edge-host.test.ts',
+  'test/adapters/edge-tilia.test.ts',
   'test/adapters/entitlement-bitset.test.ts',
+  'test/adapters/http-dispatcher.test.ts',
   'test/adapters/http.test.ts',
+  'test/adapters/memory-cache.test.ts',
   'test/adapters/memory-rate-limit.test.ts',
   'test/adapters/memory.test.ts',
   'test/adapters/mysql-money-install-race.test.ts',
   'test/adapters/mysql.test.ts',
   'test/adapters/postgres-transient-classes.test.ts',
   'test/adapters/postgres.test.ts',
+  'test/adapters/processor.test.ts',
   'test/adapters/redis.test.ts',
   'test/adapters/sqs.test.ts',
   'test/adapters/statement-order.test.ts',
@@ -358,7 +362,7 @@ test('a root test file imports the guard exactly when it reads an emit', () => {
   }
   // Exact, because three counts that only have to sum are satisfied by every file landing in the
   // one bucket the loop can never fail.
-  assert.deepEqual([guarded, exempt, plain], [34, 7, 146]);
+  assert.deepEqual([guarded, exempt, plain], [45, 0, 142]);
   assert.equal(guarded + exempt, reaching.size);
   assert.equal(reaching.size, REACHING.length);
   assert.equal(guarded + exempt + plain, files.length);

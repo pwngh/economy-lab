@@ -99,11 +99,11 @@ function main(argv) {
 
   // A compiler writes its emit at 644, and a `bin` target at 644 is a command the kernel refuses
   // to exec however correct its shebang is.
-  const { marked } = markBinsExecutable(ROOT);
+  const { marked, linked } = markBinsExecutable(ROOT);
   console.log(
     `build-packages: ${steps.length} packages in dependency order, ${built} built, ${checked} checked, ` +
       `${steps.length - checked} with no check script (their own tsconfig.json loads every file they have — ` +
-      `test/tsconfig-coverage.test.ts), ${marked.length} bin target(s) executable`,
+      `test/tsconfig-coverage.test.ts), ${marked.length} bin target(s) executable${linked.length > 0 ? `, ${linked.length} linked into node_modules/.bin` : ''}`,
   );
   return 0;
 }

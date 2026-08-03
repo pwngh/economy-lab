@@ -52,8 +52,22 @@ export const DRIVERS = [
 ] as const;
 
 // A suite that skipped proved less than it printed, and an unreachable backend skips rather
-// than fails. Every suite here runs at zero skips, so nothing is allowed one.
+// than fails. Every suite here runs at zero skips, so nothing is allowed one — except where a
+// skip is the suite reporting a fact about its subject rather than about the environment.
 const SKIP_BUDGET = 0;
+
+/**
+ * The one suite whose skips are its answer, and the exact number it may print.
+ *
+ * `@pwngh/economy-conformance` runs the store contract against the in-memory store, which does
+ * not offer `appendAll` or `lockMany`. The suite registers every case and skips those two naming
+ * the capability, which is what it does for any store — a skip here says the oracle lacks a
+ * surface, not that a backend was unreachable. Pinned at two rather than waived: a third would be
+ * a case that stopped running, and that is exactly what this budget exists to catch.
+ */
+const SKIP_BUDGETS: ReadonlyMap<string, number> = new Map([
+  ['@pwngh/economy-conformance', 2],
+]);
 
 const escape = (text: string): string =>
   text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -106,7 +120,7 @@ export function suitePlan(root: string): readonly Suite[] {
       dir: member.dir,
       files: [...new Set(files)].sort(),
       needsEngine: DRIVERS.some((driver) => driver in dependencies),
-      skipBudget: SKIP_BUDGET,
+      skipBudget: SKIP_BUDGETS.get(member.name) ?? SKIP_BUDGET,
     });
   }
   return plan;

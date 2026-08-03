@@ -188,10 +188,10 @@ test('every test script in the tree carries the file bound', () => {
       );
     }
   }
-  assert.equal(found.length, 20, `read ${found.length} package manifests`);
+  assert.equal(found.length, 21, `read ${found.length} package manifests`);
   assert.equal(
     invocations.length,
-    20,
+    21,
     `examined ${invocations.length} node --test invocations in package scripts`,
   );
 });

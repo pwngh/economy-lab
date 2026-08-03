@@ -91,6 +91,10 @@
       "types": "./dist/test.d.ts",
       "default": "./dist/test.js"
     },
+    "./conformance": {
+      "types": "./dist/conformance.d.ts",
+      "default": "./dist/conformance.js"
+    },
     "./ui": {
       "types": "./dist/ui.d.ts",
       "default": "./dist/ui.js"
@@ -142,6 +146,7 @@
     "@pwngh/economy-events": "^0.1.0",
     "@pwngh/economy-webhook": "^0.1.0",
     "@pwngh/economy-test": "^0.1.0",
+    "@pwngh/economy-conformance": "^0.1.0",
     "@pwngh/economy-ui": "^0.1.0",
     "@pwngh/economy-cli": "^0.1.0",
     "@pwngh/economy-postgres": "^0.1.0",

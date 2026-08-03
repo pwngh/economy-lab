@@ -20,15 +20,15 @@
  *   port and the conformance suite that holds every implementation to identical behavior.
  */
 
-export { runStoreConformance } from '#test/conformance/store.ts';
-export type { StoreConformanceOptions } from '#test/conformance/store.ts';
+export { runStoreConformance } from './store.js';
+export type { StoreConformanceOptions } from './store.js';
 // The declaration a store passes is typed by the roster, so an implementation outside this repo
 // can name its capabilities and be refused on the ones it does not carry.
-export type { StoreCapability } from '#src/ports.ts';
-export { runCacheConformance } from '#test/conformance/cache.ts';
-export { runRateLimiterConformance } from '#test/conformance/rate-limit.ts';
-export type { RateLimiterHarness } from '#test/conformance/rate-limit.ts';
-export { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
-export type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
-export { runProcessorConformance } from '#test/conformance/processor.ts';
-export type { ProcessorHarness } from '#test/conformance/processor.ts';
+export type { StoreCapability } from '@pwngh/economy-lab/ports';
+export { runCacheConformance } from './cache.js';
+export { runRateLimiterConformance } from './rate-limit.js';
+export type { RateLimiterHarness } from './rate-limit.js';
+export { runDispatcherConformance } from './dispatcher.js';
+export type { DispatcherHarness } from './dispatcher.js';
+export { runProcessorConformance } from './processor.js';
+export type { ProcessorHarness } from './processor.js';

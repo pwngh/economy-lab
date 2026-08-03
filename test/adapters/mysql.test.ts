@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 
 import '#test/support/dist-guard.ts';
 
-import { runStoreConformance } from '#test/conformance/store.ts';
+import { runStoreConformance } from '@pwngh/economy-conformance';
 import {
   applyMysqlSchema,
   createMysqlPool,

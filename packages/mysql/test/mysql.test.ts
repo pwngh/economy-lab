@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { runStoreConformance } from '@pwngh/economy-lab/testing';
+import { runStoreConformance } from '@pwngh/economy-conformance';
 import { spendable } from '@pwngh/economy-lab';
 
 import {

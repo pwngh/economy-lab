@@ -191,11 +191,11 @@ const importsRoot = (file: string, root: string): boolean =>
   readFileSync(file, 'utf8').includes(`'#${root}'`);
 
 /**
- * Every unit this gate certifies as typechecked: the fifteen package directories that keep tests,
+ * Every unit this gate certifies as typechecked: the sixteen package directories that keep tests,
  * plus the bench. Edited deliberately when a unit is added, because a unit that leaves takes its
  * own discovery with it and every count then falls by one together.
  */
-const DECLARED_UNITS = 16;
+const DECLARED_UNITS = 17;
 
 // A discovery sweep that finds nothing passes every assertion under it. The count is exact and
 // reconciled against the whole directory, so a package that stops keeping tests has to be named
@@ -214,7 +214,7 @@ test('the sweep finds every package that keeps tests', () => {
   );
   assert.equal(
     packages.length,
-    15,
+    16,
     `found ${packages.length} packages with tests: ${packages.map((p) => p.slug).join(', ')}`,
   );
   assert.equal(

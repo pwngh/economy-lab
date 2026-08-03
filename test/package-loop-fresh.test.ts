@@ -107,7 +107,7 @@ test('a package dates the emit its own tests read, and no more', () => {
   );
   assert.equal(
     suites.length,
-    15,
+    16,
     `${suites.length} packages run their own loop`,
   );
   const all = new Set<string>();

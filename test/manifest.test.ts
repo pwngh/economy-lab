@@ -121,6 +121,10 @@ const DOORLESS_EXPORTS = new Map([
     "the sibling packages' seam, carrying no semver contract: cli and adapters import it, integrator code never does",
   ],
   [
+    '@pwngh/economy-conformance/internal',
+    'the pieces of the suites only their own tests read: the lab holds the suites to their own shape through it, and a caller running conformance never needs it',
+  ],
+  [
     '@pwngh/economy-postgres/driver',
     'the raw pg pool for tooling that keeps its own tables beside the ledger, reached past the front door on purpose',
   ],
@@ -152,7 +156,7 @@ test('every package export has a door, or is a named exemption', () => {
   }
   // A gate that read no package would satisfy every assertion above it, so the count is the
   // check: it is the doors and the exemptions exactly, with nothing over and nothing missing.
-  assert.equal(examined, 25, `read ${examined} package exports`);
+  assert.equal(examined, 27, `read ${examined} package exports`);
   assert.equal(examined, doors().length + DOORLESS_EXPORTS.size);
 });
 
@@ -175,7 +179,7 @@ test('every exempted export is a real export carrying a real reason', () => {
       `${specifier} is exempted with no reason worth reading`,
     );
   }
-  assert.equal(DOORLESS_EXPORTS.size, 2);
+  assert.equal(DOORLESS_EXPORTS.size, 3);
 });
 
 test('no two doors point at the same export', () => {

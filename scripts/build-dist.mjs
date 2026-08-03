@@ -32,9 +32,11 @@ const DIST = join(ROOT, 'dist');
 rmSync(TMP, { recursive: true, force: true });
 rmSync(DIST, { recursive: true, force: true });
 
-// Copy the compile inputs: all of src/, the conformance suite, and the support helpers it
-// imports. Extra support files are harmless; tsc emits only the import closure.
-for (const dir of ['src', 'test/conformance', 'test/support']) {
+// Copy the compile inputs. Only src/ now: the conformance harness left for
+// @pwngh/economy-conformance, which is a package and builds itself. While it lived here the lab's
+// build compiled a directory of test files, one of which imported the engine packages that import
+// the lab back — a cycle no clean checkout could resolve in one pass.
+for (const dir of ['src']) {
   cpSync(join(ROOT, dir), join(TMP, dir), { recursive: true });
 }
 

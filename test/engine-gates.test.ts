@@ -109,6 +109,7 @@ const CONDITIONAL_EXEMPTIONS: readonly string[] = [
 /** Every store the conformance suite certifies, and where. Exact: a store that stops being
  * certified is a coverage loss, and a call site that moves under a conditional is this item. */
 const CONFORMANCE_SITES: readonly string[] = [
+  'packages/conformance/test/oracle.test.ts :: memory oracle',
   'packages/mysql/test/mysql.test.ts :: economy-mysql',
   'packages/postgres/test/postgres.test.ts :: economy-postgres',
   'packages/postgres/test/postgres.test.ts :: economy-postgres (caller pool, driver defaults)',

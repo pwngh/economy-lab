@@ -53,6 +53,7 @@
  *   exactly-once (PG + MySQL + memory): duplicate idempotency key / webhook event id rejected.
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 

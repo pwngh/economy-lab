@@ -204,10 +204,6 @@ function packageUnit(member: Member): BuildUnit {
 // include pattern names a directory that is copied there whole and emitted whole.
 const STAGED_INCLUDE = /^(?<staging>[^/]+)\/(?<root>.+)\/\*\*\/\*\.ts$/;
 
-// Copied into the same compile for the conformance suite to import. Only the part of it that
-// closure reaches is emitted, so the rest is not an unbuilt source.
-const LAB_CLOSURE_SOURCES = 'test/support';
-
 function labUnit(root: string): BuildUnit {
   const lab = readRootPackage(root);
   const config = readTsConfig(join(root, 'tsconfig.build.json'), lab.name);
@@ -237,11 +233,6 @@ function labUnit(root: string): BuildUnit {
       `dist-freshness: ${lab.name}'s tsconfig.build.json includes nothing`,
     );
   }
-  roots.push({
-    sources: LAB_CLOSURE_SOURCES,
-    outputs: join(outDir, LAB_CLOSURE_SOURCES),
-    closureOnly: true,
-  });
   for (const each of roots) assertDisjoint(each, lab.name);
   const command = lab.json.scripts?.build;
   if (command === undefined) {

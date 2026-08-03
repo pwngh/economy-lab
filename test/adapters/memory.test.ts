@@ -12,7 +12,7 @@
 
 import '#test/support/dist-guard.ts';
 
-import { runStoreConformance } from '#test/conformance/store.ts';
+import { runStoreConformance } from '@pwngh/economy-conformance';
 import { memoryStore } from '#src/adapters/memory.ts';
 
 // The reference adapter is a single writer, so it needs neither batched locking nor a fused

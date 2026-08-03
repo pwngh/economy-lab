@@ -35,19 +35,19 @@ import {
   STORE_CAPABILITIES,
   capabilitiesOf,
   capabilityConflicts,
-} from '#src/store-capabilities.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
+} from '@pwngh/economy-lab/store-kit';
+import { memoryStore } from '@pwngh/economy-lab/adapters';
 import { postgresStore } from '@pwngh/economy-postgres';
 import {
   CAPABILITY_TESTS,
   agreesWithTheMemoryOracle,
   reOffersEveryUnmarkedRow,
-} from '#test/conformance/store.ts';
+} from '@pwngh/economy-conformance/internal';
 import {
   leavesEveryStateItReaches,
   waitsOutTheReportedRetry,
-} from '#test/conformance/rate-limit.ts';
-import { memoryRateLimiter } from '#src/adapters/memory-rate-limit.ts';
+} from '@pwngh/economy-conformance/internal';
+import { memoryRateLimiter } from '@pwngh/economy-lab/adapters';
 import {
   freshName,
   makeIsolatedMysqlStore,
@@ -57,9 +57,14 @@ import {
 import { rigUnconfigured } from '#test/support/engine-gate.ts';
 import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
 
-import type { RateLimiterHarness } from '#test/conformance/rate-limit.ts';
-import type { RatePolicy } from '#src/adapters/rate-policy.ts';
-import type { RateLimiter, Store, StoreCapability, Unit } from '#src/ports.ts';
+import type { RateLimiterHarness } from '@pwngh/economy-conformance/internal';
+import type { RatePolicy } from '@pwngh/economy-lab/adapters';
+import type {
+  RateLimiter,
+  Store,
+  StoreCapability,
+  Unit,
+} from '@pwngh/economy-lab/ports';
 
 // The roster is exact, not a floor. A capability the suite forgets to name is a surface nothing
 // branches on, which is precisely how a test body comes to return early and report success.
@@ -190,7 +195,7 @@ describe('Store capability roster', () => {
 // against itself is what let a renamed test sit behind a passing gate. Both counts below are pinned
 // exactly, because an extractor that matches nothing leaves every mismatch list empty.
 const SUITE_SOURCE = readFileSync(
-  new URL('./conformance/store.ts', import.meta.url),
+  new URL('../packages/conformance/src/store.ts', import.meta.url),
   'utf8',
 );
 
@@ -537,7 +542,7 @@ describe('Store claim re-offer refusal', () => {
 // `pg` connect is one, and its own `message` is empty: reading `message` alone produced a skip per
 // test reading "backend unreachable: " and then nothing.
 const CONFORMANCE_EMIT = new URL(
-  '../dist/test/conformance/store.js',
+  '../packages/conformance/dist/store.js',
   import.meta.url,
 ).href;
 
@@ -797,7 +802,7 @@ function record(
 
 const COVERAGE_SUBJECT = (handles: readonly string[]) => (out: string) => `
 import { writeFileSync } from 'node:fs';
-import { runStoreConformance } from ${EMIT('../dist/test/conformance/store.js')};
+import { runStoreConformance } from ${EMIT('../packages/conformance/dist/store.js')};
 import { memoryStore } from ${EMIT('../dist/src/adapters/memory.js')};
 ${RECORDER(handles)}
 process.on('exit', () => writeFileSync(${JSON.stringify(out)}, JSON.stringify([...seen].sort())));
@@ -992,7 +997,7 @@ describe('Store port coverage', () => {
 // suite's source, and the cases run against a limiter wrong in the way they exist to catch.
 
 const LIMITER_SOURCE = readFileSync(
-  new URL('./conformance/rate-limit.ts', import.meta.url),
+  new URL('../packages/conformance/src/rate-limit.ts', import.meta.url),
   'utf8',
 );
 
@@ -1028,7 +1033,7 @@ function harnessOver(
 
 const LIMITER_SUBJECT = (out: string) => `
 import { writeFileSync } from 'node:fs';
-import { runRateLimiterConformance } from ${EMIT('../dist/test/conformance/rate-limit.js')};
+import { runRateLimiterConformance } from ${EMIT('../packages/conformance/dist/rate-limit.js')};
 writeFileSync(${JSON.stringify(out)}, '[]');
 runRateLimiterConformance('unreachable', () => {
   throw new Error('REDIS_URL unset');
@@ -1135,7 +1140,7 @@ describe('RateLimiter conformance connect-or-skip', () => {
  */
 const CASES_SUBJECT = (declared: number) => (): string => `
 import { test as nodeTest } from 'node:test';
-import { countedCases } from ${EMIT('../dist/test/conformance/cases.js')};
+import { countedCases } from ${EMIT('../packages/conformance/dist/cases.js')};
 const test = countedCases('fixture', ${declared}, (name, body) => nodeTest(name, body));
 test('one', () => {});
 test('two', () => {});

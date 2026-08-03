@@ -13,10 +13,10 @@
 import { describe, test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { countedCases } from '#test/conformance/cases.ts';
-import { encodeEvent } from '#src/adapters/event-wire.ts';
+import { countedCases } from './cases.js';
+import { encodeEvent } from '@pwngh/economy-lab/adapters';
 
-import type { Dispatcher, EconomyEvent } from '#src/ports.ts';
+import type { Dispatcher, EconomyEvent } from '@pwngh/economy-lab/ports';
 
 /**
  * Wraps one Dispatcher adapter over a controllable fake transport. It records the message bodies

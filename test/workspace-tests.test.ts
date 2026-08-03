@@ -95,7 +95,7 @@ test('every workspace member declares a test script, or is a named exemption', (
       `${member.name} declares no test script and has no named exemption`,
     );
   }
-  assert.equal(examined, 17, `read ${examined} workspace members`);
+  assert.equal(examined, 18, `read ${examined} workspace members`);
   assert.equal(examined, withScript + NO_SUITE.size);
 });
 
@@ -123,7 +123,7 @@ test('every test script is one of the approved forms', () => {
     .map((member) => member.json.scripts?.test)
     .filter((script) => script !== undefined);
   assert.deepEqual([...new Set(scripts)].sort(), APPROVED);
-  assert.equal(scripts.length, 16);
+  assert.equal(scripts.length, 17);
 });
 
 // The assertion that keeps a green run honest. `node --test` against a glob matching nothing
@@ -164,22 +164,24 @@ test("every package's glob matches exactly the test files on disk", () => {
   }
   assert.equal(
     examined,
-    15,
+    16,
     `compared ${examined} packages against their test/`,
   );
   assert.equal(ELSEWHERE.size, 1);
 });
 
-test('the runner plans exactly the workspace, and allows no suite a skip', () => {
+test('the runner plans exactly the workspace, and allows one named suite its two skips', () => {
   const plan = planned();
   assert.deepEqual(
     plan.map((suite) => suite.name).sort(),
     [...workspace.keys()].filter((name) => !NO_SUITE.has(name)).sort(),
   );
-  assert.equal(plan.length, 16);
+  assert.equal(plan.length, 17);
   assert.deepEqual(
-    plan.filter((suite) => suite.skipBudget !== 0).map((suite) => suite.name),
-    [],
+    plan
+      .filter((suite) => suite.skipBudget !== 0)
+      .map((suite) => [suite.name, suite.skipBudget]),
+    [['@pwngh/economy-conformance', 2]],
   );
 });
 

@@ -19,6 +19,7 @@
  * empty run is not a false pass, and `pinEngineGateRoster` is what holds that.
  */
 
+import '#test/support/dist-guard.ts';
 import assert from 'node:assert/strict';
 
 import {

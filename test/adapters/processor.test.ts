@@ -10,13 +10,14 @@
  * @license MIT
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { httpProcessor } from '#src/adapters/processor.ts';
 import { decodeAmount } from '#src/money.ts';
 import { EconomyError } from '#src/errors.ts';
-import { runProcessorConformance } from '#test/conformance/processor.ts';
+import { runProcessorConformance } from '@pwngh/economy-conformance';
 import { fakeProcessor } from '#test/support/capabilities.ts';
 
 import type { FetchLike } from '#src/adapters/processor.ts';

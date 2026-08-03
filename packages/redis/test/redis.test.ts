@@ -17,7 +17,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import {
   runCacheConformance,
   runRateLimiterConformance,
-} from '@pwngh/economy-lab/testing';
+} from '@pwngh/economy-conformance';
 import { Redis } from 'ioredis';
 
 import { redisCache, redisRateLimiter } from '../src/index.js';

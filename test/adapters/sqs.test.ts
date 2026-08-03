@@ -16,12 +16,12 @@ import assert from 'node:assert/strict';
 import '#test/support/dist-guard.ts';
 
 import { sqs, sqsDispatcher } from '@pwngh/economy-sqs';
-import { runDispatcherConformance } from '#test/conformance/dispatcher.ts';
+import { runDispatcherConformance } from '@pwngh/economy-conformance';
 
 import type { SqsClient, SqsCommand } from '@pwngh/economy-sqs';
 import type { EconomyError } from '#src/errors.ts';
 import type { EconomyEvent } from '#src/ports.ts';
-import type { DispatcherHarness } from '#test/conformance/dispatcher.ts';
+import type { DispatcherHarness } from '@pwngh/economy-conformance';
 
 function sampleEvent(): EconomyEvent {
   return {

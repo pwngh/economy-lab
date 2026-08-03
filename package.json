@@ -59,10 +59,6 @@
       "types": "./dist/src/sql-kit.d.ts",
       "default": "./dist/src/sql-kit.js"
     },
-    "./testing": {
-      "types": "./dist/test/conformance/index.d.ts",
-      "default": "./dist/test/conformance/index.js"
-    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,

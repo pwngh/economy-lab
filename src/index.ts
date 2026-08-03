@@ -140,7 +140,7 @@ export type { Rounding } from '#src/money.ts';
 // The fee arithmetic every charge runs through. A host quoting a fee before it posts, or
 // showing a seller what a split leaves, calls these rather than re-deriving the rounding.
 export { feeForPrice, revenueForSplit } from '#src/pricing.ts';
-export { credit, debit } from '#src/ledger.ts';
+export { credit, debit, postEntry } from '#src/ledger.ts';
 export type { Leg } from '#src/ports.ts';
 
 // The operation constructors give one typed builder per kind, so a caller writes topUp({ ... })

@@ -16,6 +16,7 @@
   "economy/webhook": "@pwngh/economy-webhook",
 
   "economy/test": "@pwngh/economy-test",
+  "economy/conformance": "@pwngh/economy-conformance",
   "economy/ui": "@pwngh/economy-ui",
   "economy/ui/core": "@pwngh/economy-ui/core",
   "economy/cli": "@pwngh/economy-cli",

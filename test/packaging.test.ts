@@ -66,7 +66,7 @@ const literal = (entry: string) =>
 // npm pack drops a listed file that is not there without a word, so the tarball ships
 // unlicensed and nothing upstream complains.
 test('every package ships the license text its files array promises', () => {
-  assert.equal(packages.length, 17, `found ${packages.length} packages`);
+  assert.equal(packages.length, 18, `found ${packages.length} packages`);
   for (const p of packages) {
     const path = join(p.dir, 'LICENSE');
     assert.ok(
@@ -193,7 +193,7 @@ test('every package pins the compiler the root pins, and installs no other', () 
   }
   // A sweep that read no package would satisfy every assertion around it, so the count is the
   // check: one pin per workspace member, none skipped.
-  assert.equal(pinned.length, 17, `read ${pinned.length} package pins`);
+  assert.equal(pinned.length, 18, `read ${pinned.length} package pins`);
 
   const versions = [...new Set(pinned.map(([, version]) => version))];
   assert.deepEqual(

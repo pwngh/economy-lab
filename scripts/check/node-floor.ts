@@ -136,8 +136,8 @@ function main(): number {
       entry.isDirectory() &&
       existsSync(join(ROOT, 'apps', entry.name, 'package.json')),
   );
-  if (manifests.length !== 18) {
-    problems.push(`expected 18 published manifests, read ${manifests.length}`);
+  if (manifests.length !== 19) {
+    problems.push(`expected 19 published manifests, read ${manifests.length}`);
   }
   if (apps.length !== EXEMPT.size) {
     problems.push(

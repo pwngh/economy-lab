@@ -60,31 +60,32 @@ economy serve        # production: refuses every dev stand-in before it binds
 
 ### The doors
 
-| Door                              | What it is for                                                                        |
-| --------------------------------- | ------------------------------------------------------------------------------------- |
-| `@pwngh/economy/app`              | `createApp` and `withDev`: one module file assembled into a running app               |
-| `@pwngh/economy/module`           | The module contract tooling reads: seam types, the resolver, the compile, boot errors |
-| `@pwngh/economy/ops`              | The fourteen operation constructors and the names that read an outcome                |
-| `@pwngh/economy/auth`             | Who is calling: bearer resolvers, JWKS, API keys, dev tokens, actors                  |
-| `@pwngh/economy/money`            | `credits`, `usd`, and the typed face over a `CREDIT:600.00` wire amount               |
-| `@pwngh/economy/money/rate`       | Converting credits to dollars and back, at a rate that carries its own id             |
-| `@pwngh/economy/money/bps`        | Basis points: a fee taken off a price, a split paid across recipients                 |
-| `@pwngh/economy/money/wire-value` | Reading and writing the `CREDIT:600.00` wire form itself                              |
-| `@pwngh/economy/receipt`          | A signed, chain-bound record of one transaction that a client holds                   |
-| `@pwngh/economy/client`           | The typed `/v1` HTTP client, for a service that calls the economy                     |
-| `@pwngh/economy/events`           | The event roster and its narrowing guards, for post-commit handlers                   |
-| `@pwngh/economy/webhook`          | Signing and verifying an inbound provider callback                                    |
-| `@pwngh/economy/test`             | `openTestEconomy`: the same app over deterministic ports and personas                 |
-| `@pwngh/economy/ui`               | React storefront hooks — `useWallet`, `useEntitlements`, and friends                  |
-| `@pwngh/economy/ui/core`          | The same reads without React, for any other view layer                                |
-| `@pwngh/economy/cli`              | The `economy` verbs as functions, for scripts that drive them                         |
-| `@pwngh/economy/postgres`         | Keep the ledger in PostgreSQL: one call, with the pool and schema gate inside         |
-| `@pwngh/economy/mysql`            | The same store in MySQL, with the InnoDB contention designed out                      |
-| `@pwngh/economy/mysql/mariadb`    | The same store again on MariaDB's pipelining wire, a one-line swap                    |
-| `@pwngh/economy/redis`            | The read-through cache in front of the store, and the rate limiter at the edge        |
-| `@pwngh/economy/sqs`              | Deliver committed events to Amazon SQS, standard queue or FIFO                        |
-| `@pwngh/economy/adapters/express` | Mount a running economy on Express, raw body first                                    |
-| `@pwngh/economy/adapters/fastify` | Mount on Fastify, raw bytes inside the plugin's encapsulation                         |
+| Door                              | What it is for                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| `@pwngh/economy/app`              | `createApp` and `withDev`: one module file assembled into a running app                    |
+| `@pwngh/economy/module`           | The module contract tooling reads: seam types, the resolver, the compile, boot errors      |
+| `@pwngh/economy/ops`              | The fourteen operation constructors and the names that read an outcome                     |
+| `@pwngh/economy/auth`             | Who is calling: bearer resolvers, JWKS, API keys, dev tokens, actors                       |
+| `@pwngh/economy/money`            | `credits`, `usd`, and the typed face over a `CREDIT:600.00` wire amount                    |
+| `@pwngh/economy/money/rate`       | Converting credits to dollars and back, at a rate that carries its own id                  |
+| `@pwngh/economy/money/bps`        | Basis points: a fee taken off a price, a split paid across recipients                      |
+| `@pwngh/economy/money/wire-value` | Reading and writing the `CREDIT:600.00` wire form itself                                   |
+| `@pwngh/economy/receipt`          | A signed, chain-bound record of one transaction that a client holds                        |
+| `@pwngh/economy/client`           | The typed `/v1` HTTP client, for a service that calls the economy                          |
+| `@pwngh/economy/events`           | The event roster and its narrowing guards, for post-commit handlers                        |
+| `@pwngh/economy/webhook`          | Signing and verifying an inbound provider callback                                         |
+| `@pwngh/economy/test`             | `openTestEconomy`: the same app over deterministic ports and personas                      |
+| `@pwngh/economy/conformance`      | The five suites that hold a store, cache, limiter, dispatcher or processor to its contract |
+| `@pwngh/economy/ui`               | React storefront hooks — `useWallet`, `useEntitlements`, and friends                       |
+| `@pwngh/economy/ui/core`          | The same reads without React, for any other view layer                                     |
+| `@pwngh/economy/cli`              | The `economy` verbs as functions, for scripts that drive them                              |
+| `@pwngh/economy/postgres`         | Keep the ledger in PostgreSQL: one call, with the pool and schema gate inside              |
+| `@pwngh/economy/mysql`            | The same store in MySQL, with the InnoDB contention designed out                           |
+| `@pwngh/economy/mysql/mariadb`    | The same store again on MariaDB's pipelining wire, a one-line swap                         |
+| `@pwngh/economy/redis`            | The read-through cache in front of the store, and the rate limiter at the edge             |
+| `@pwngh/economy/sqs`              | Deliver committed events to Amazon SQS, standard queue or FIFO                             |
+| `@pwngh/economy/adapters/express` | Mount a running economy on Express, raw body first                                         |
+| `@pwngh/economy/adapters/fastify` | Mount on Fastify, raw bytes inside the plugin's encapsulation                              |
 
 Every door also publishes as its own package — `@pwngh/economy/money` is `@pwngh/economy-money`.
 Depend on this one to get all of them and the command; depend on a single package when that is all
@@ -149,6 +150,7 @@ all of them and the command; depend on one directly when it is all you use.
 - [`@pwngh/economy-auth`](../auth) — behind `economy/auth`: bearer resolvers, JWKS, API keys, dev tokens, actors
 - [`@pwngh/economy-money`](../money) — behind `economy/money`: `credits`, `usd`, and the typed face over a wire amount
 - [`@pwngh/economy-receipt`](../receipt) — behind `economy/receipt`: a signed, chain-bound record of one transaction
+- [`@pwngh/economy-conformance`](../conformance) — behind `economy/conformance`: the suites an implementation is held to
 - [`@pwngh/economy-client`](../client) — behind `economy/client`: the typed `/v1` HTTP client
 - [`@pwngh/economy-events`](../events) — behind `economy/events`: the event roster and its narrowing guards
 - [`@pwngh/economy-webhook`](../webhook) — behind `economy/webhook`: signing and verifying a provider callback

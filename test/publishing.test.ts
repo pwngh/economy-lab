@@ -101,7 +101,7 @@ test('the umbrella is published after every package it depends on', () => {
   );
   // Exact, and reconciled against the workspace: a sibling that drops off the umbrella has to be
   // named below rather than quietly shrinking the set this test walks.
-  assert.equal(deps.length, 15, `${UMBRELLA} names ${deps.length} siblings`);
+  assert.equal(deps.length, 16, `${UMBRELLA} names ${deps.length} siblings`);
   assert.equal(
     deps.length + NOT_A_SIBLING.size,
     workspace.size,
@@ -326,10 +326,10 @@ test('every lab specifier the packages ship resolves against the lab exports map
   );
   // A sweep whose regex quietly stopped matching would report the same empty list, so the count
   // of what was read is the assertion that matters.
-  assert.equal(specifiers.length, 127, `read ${specifiers.length} specifiers`);
+  assert.equal(specifiers.length, 146, `read ${specifiers.length} specifiers`);
   assert.equal(
     new Set(specifiers.map((s) => s.package)).size,
-    13,
+    14,
     'the sweep did not reach every package that imports the lab',
   );
 });
@@ -349,12 +349,12 @@ test('every lab specifier in a package rig resolves against this tree', () => {
   );
   assert.equal(
     rigSpecifiers.length,
-    53,
+    50,
     `read ${rigSpecifiers.length} rig specifiers`,
   );
   assert.equal(
     new Set(rigSpecifiers.map((s) => s.package)).size,
-    12,
+    13,
     'the sweep did not reach every package whose rigs import the lab',
   );
   // A rig may name a subpath no published lab answers — `packages/postgres/test` imports
@@ -372,7 +372,7 @@ test('every lab specifier in a package rig resolves against this tree', () => {
 test('every lab import in the packages is sorted into exactly one of the two halves', () => {
   assert.equal(specifiers.length + rigSpecifiers.length, allSpecifiers.length);
   assert.ok(specifiers.length > 0 && rigSpecifiers.length > 0);
-  assert.equal(allSpecifiers.length, 180);
+  assert.equal(allSpecifiers.length, 196);
 
   const shippedRoots = new Set(
     specifiers.map((s) => s.file.split('/').slice(0, 3).join('/')),
@@ -404,8 +404,8 @@ test('every lab import in the packages is sorted into exactly one of the two hal
       `${tree} is swept as a rig and ${slug} ships "${dir}"`,
     );
   }
-  assert.equal(shippedRoots.size, 13, [...shippedRoots].sort().join(' '));
-  assert.equal(rigRoots.size, 13, [...rigRoots].sort().join(' '));
+  assert.equal(shippedRoots.size, 14, [...shippedRoots].sort().join(' '));
+  assert.equal(rigRoots.size, 14, [...rigRoots].sort().join(' '));
 });
 
 // A lab import resolving from devDependencies works in the workspace and is absent from the
@@ -424,7 +424,7 @@ test('every package importing the lab depends on it at runtime', () => {
       `${name} wants ${LAB_NAME}@${range} and the lab is at ${root.version}`,
     );
   }
-  assert.equal(examined, 13, `read ${examined} lab-importing packages`);
+  assert.equal(examined, 14, `read ${examined} lab-importing packages`);
 });
 
 test('the specifiers no published lab satisfies are exactly the ones the release is for', () => {

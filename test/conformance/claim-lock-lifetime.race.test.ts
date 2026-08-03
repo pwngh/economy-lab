@@ -44,6 +44,7 @@
  * Postgres and MySQL run when reachable and skip, never fail, when not.
  */
 
+import '#test/support/dist-guard.ts';
 import { describe, test, before, after } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';

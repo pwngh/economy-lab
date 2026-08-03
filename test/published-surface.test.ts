@@ -78,6 +78,7 @@ const MOVED_TO_A_PACKAGE = new Map([
   ['./engines/postgres', '@pwngh/economy-postgres'],
   ['./engines/mysql', '@pwngh/economy-mysql'],
   ['./engines/mysql-mariadb', '@pwngh/economy-mysql/mariadb'],
+  ['./testing', '@pwngh/economy-conformance'],
 ]);
 
 /** The published subpath renamed in place, its published key to this tree's. */
@@ -159,7 +160,7 @@ test('every published subpath this tree dropped is recorded, with where it went'
       `${published} is recorded as renamed to ${local}, which this tree does not export`,
     );
   }
-  assert.equal(MOVED_TO_A_PACKAGE.size, 5);
+  assert.equal(MOVED_TO_A_PACKAGE.size, 6);
   assert.equal(RENAMED_SUBPATHS.size, 1);
 });
 
@@ -184,7 +185,7 @@ test('every surviving subpath still answers every name it published', () => {
       `${subpath} published ${lost.join(', ')} and ${localKeyOf(subpath)} no longer answers`,
     );
   }
-  assert.equal(examined, 9, `read ${examined} surviving subpaths`);
+  assert.equal(examined, 8, `read ${examined} surviving subpaths`);
 });
 
 test('every published symbol this tree dropped is recorded, as a move or a rename', () => {
@@ -213,7 +214,7 @@ test('every published symbol this tree dropped is recorded, as a move or a renam
       `${published} is recorded as renamed to ${local}, which this tree does not export`,
     );
   }
-  assert.equal(moved.length, 16, `${moved.length} symbols left with a subpath`);
+  assert.equal(moved.length, 22, `${moved.length} symbols left with a subpath`);
   assert.equal(RENAMED_SYMBOLS.size, 2);
 });
 
@@ -262,7 +263,7 @@ test('every specifier a moved subpath names exports the symbols it took', () => 
       );
     }
   }
-  assert.equal(examined, 18, `resolved ${examined} moved symbols`);
+  assert.equal(examined, 24, `resolved ${examined} moved symbols`);
 });
 
 // ---------------------------------------------------------------------------
@@ -300,7 +301,7 @@ test('the CHANGELOG names every dropped subpath, symbol and migration target', (
       `${published} is now ${local} and the CHANGELOG does not name it`,
     );
   }
-  assert.equal(examined, 29, `read ${examined} claims`);
+  assert.equal(examined, 36, `read ${examined} claims`);
 });
 
 // ---------------------------------------------------------------------------

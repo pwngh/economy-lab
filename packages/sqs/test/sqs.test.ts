@@ -13,11 +13,11 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { runDispatcherConformance } from '@pwngh/economy-lab/testing';
+import { runDispatcherConformance } from '@pwngh/economy-conformance';
 
 import { sqs, sqsDispatcher } from '../src/index.js';
 
-import type { DispatcherHarness } from '@pwngh/economy-lab/testing';
+import type { DispatcherHarness } from '@pwngh/economy-conformance';
 import type { EconomyEvent } from '@pwngh/economy-lab/ports';
 import type { SqsCommand } from '../src/index.js';
 

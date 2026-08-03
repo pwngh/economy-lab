@@ -17,19 +17,19 @@ import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
-import { countedCases } from '#test/conformance/cases.ts';
-import { credit, debit, postEntry } from '#src/ledger.ts';
-import { memoryStore } from '#src/adapters/memory.ts';
-import { decodeAmount, toAmount } from '#src/money.ts';
-import { spendable, SYSTEM } from '#src/accounts.ts';
-import { byCodeUnit } from '#src/bytes.ts';
+import { countedCases } from './cases.js';
+import { credit, debit, postEntry } from '@pwngh/economy-lab';
+import { memoryStore } from '@pwngh/economy-lab/adapters';
+import { decodeAmount, toAmount } from '@pwngh/economy-lab';
+import { spendable, SYSTEM } from '@pwngh/economy-lab';
+import { byCodeUnit } from '@pwngh/economy-lab/store-kit';
 import {
   STORE_CAPABILITIES,
   capabilitiesOf,
   capabilityConflicts,
-} from '#src/store-capabilities.ts';
+} from '@pwngh/economy-lab/store-kit';
 
-import type { Amount } from '#src/money.ts';
+import type { Amount } from '@pwngh/economy-lab';
 import type {
   Attempt,
   Checkpoint,
@@ -44,9 +44,9 @@ import type {
   StoreCapability,
   Subscription,
   Unit,
-} from '#src/ports.ts';
-import type { AccountRef } from '#src/accounts.ts';
-import type { Operation, Transaction } from '#src/contract.ts';
+} from '@pwngh/economy-lab/ports';
+import type { AccountRef } from '@pwngh/economy-lab';
+import type { Operation, Transaction } from '@pwngh/economy-lab';
 
 // Fresh user id per call, so tests don't share balances or hash-chain history.
 let userSeq = 0;
@@ -2999,7 +2999,7 @@ function reasonOf(error: unknown): string {
  * hook.
  *
  * @example
- * import { runStoreConformance } from '@pwngh/economy-lab/testing';
+ * import { runStoreConformance } from '@pwngh/economy-conformance';
  * import { myStore } from './my-store.js';
  *
  * runStoreConformance('my-store', () => myStore(process.env.DATABASE_URL!));
