@@ -21,8 +21,14 @@
 // The roster comes from the manifests' own `bin` maps, so a package that declares a second
 // command, or a new package that declares its first, is covered without being named here.
 
-import { chmodSync, existsSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  statSync,
+  symlinkSync,
+} from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -84,9 +90,11 @@ export function declaredBins(root: string): DeclaredBin[] {
 export function markBinsExecutable(root: string): {
   readonly marked: readonly DeclaredBin[];
   readonly unbuilt: readonly DeclaredBin[];
+  readonly linked: readonly DeclaredBin[];
 } {
   const marked: DeclaredBin[] = [];
   const unbuilt: DeclaredBin[] = [];
+  const linked: DeclaredBin[] = [];
   for (const bin of declaredBins(root)) {
     if (!existsSync(bin.target)) {
       unbuilt.push(bin);
@@ -94,8 +102,26 @@ export function markBinsExecutable(root: string): {
     }
     chmodSync(bin.target, statSync(bin.target).mode | EXECUTABLE);
     marked.push(bin);
+    if (linkBin(bin)) linked.push(bin);
   }
-  return { marked, unbuilt };
+  return { marked, unbuilt, linked };
+}
+
+/**
+ * Point node_modules/.bin at a freshly built target, and say whether it had to.
+ *
+ * npm writes this link while it installs, and it skips a workspace bin whose target does not
+ * exist yet. A clean checkout has no `dist`, so `npm ci` installs cleanly and links nothing, and
+ * building afterwards does not send npm back to look — measured on a fresh clone: `npm ci` exit 0,
+ * zero links, still zero after a full build. Every local tree has the links because an
+ * `npm install` ran there once when a `dist` happened to exist, which is why this only ever shows
+ * up in CI. The build is what makes the target real, so the build is what owns the link.
+ */
+function linkBin(bin: DeclaredBin): boolean {
+  if (existsSync(bin.link)) return false;
+  mkdirSync(dirname(bin.link), { recursive: true });
+  symlinkSync(relative(dirname(bin.link), bin.target), bin.link);
+  return true;
 }
 
 const HERE = fileURLToPath(new URL('../..', import.meta.url));
