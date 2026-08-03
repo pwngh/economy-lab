@@ -44,4 +44,4 @@ The main entry re-exports the **worker** and **server** constructors and their t
 
 The **supervisor** is an in-process library that the core never imports. To switch it off, leave it out of the composition. It observes only through the `meter` and `logger` ports. It remediates only through host-provided levers, and mandatory guardrails bound every remediation. [Ops & runbooks](/economy/ops/) owns the operational story.
 
-**store-kit** is what a conforming implementation computes with: the same chain hashes, balance deltas, orderings, and wire encodings the built-in engines compute. The suites that hold an implementation to the contract are their own package, `@pwngh/economy-conformance`, reached through `economy/conformance`.
+**store-kit** is what a conforming implementation computes with: the same chain hashes, balance deltas, orderings, and wire encodings the built-in engines compute. The suites that test an implementation against that contract live in their own package, `@pwngh/economy-conformance`, reached through `economy/conformance`.

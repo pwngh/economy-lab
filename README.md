@@ -1,6 +1,6 @@
 # economy-lab
 
-A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.
+A provably-solvent credits economy on one double-entry ledger.
 
 [![ci](https://github.com/pwngh/economy-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/pwngh/economy-lab/actions/workflows/ci.yml)
 [![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950)](test/manifest.test.ts)
@@ -24,12 +24,12 @@ A provably-solvent credits economy: wallets, payouts, subscriptions, and a marke
 
 ## Highlights
 
-- **Zero runtime dependencies** — pure TypeScript; the whole economy runs in-memory with no infrastructure.
-- **Provably solvent** — `read.health()` snapshots every solvency and integrity invariant, and `proveEconomy` re-derives them from the log. `make prove` and `make fuzz` surface any leak or drift.
-- **Tamper-evident by construction** — every balance folds from an append-only, hash-chained, double-entry log under signed Merkle checkpoints.
-- **Three ledger stores, one Store suite** — in-memory, PostgreSQL, and MySQL or MariaDB all pass `runStoreConformance`. Redis passes the Cache suite, Amazon SQS the Dispatcher suite.
-- **A "no" is a return value** — `submit` returns an `Outcome` and never throws for a rejection. Every request is idempotent.
-- **Supervisor built in** — the `./supervisor` entry point watches the Meter and Logger ports for twelve incident signatures and writes a hash-chained audit trail. Leaving it out of the composition is the off switch.
+- **Zero runtime dependencies** — pure TypeScript. The whole economy runs in memory.
+- **Provably solvent** — `read.health()` snapshots every invariant; `proveEconomy` re-derives them from the log.
+- **Tamper-evident** — every balance folds from an append-only, hash-chained log under signed Merkle checkpoints.
+- **Three ledger stores, one suite** — memory, PostgreSQL and MySQL all pass [`@pwngh/economy-conformance`](packages/conformance). Redis passes the Cache suite, Amazon SQS the Dispatcher suite.
+- **A "no" is a return value** — `submit` returns an `Outcome` and never throws for a rejection.
+- **Supervisor built in** — `./supervisor` watches twelve incident signatures and writes a hash-chained audit trail. Leaving it out is the off switch.
 
 ## Quick start
 

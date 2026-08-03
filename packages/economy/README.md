@@ -6,11 +6,14 @@ whatever combination your app needs.
 
 ## Features
 
-- **One dependency, twenty-three doors** - Each door is a one-line re-export of a package that also publishes on its own, so nothing here can drift from what it points at
-- **The `economy` command** - `dev`, `serve`, `worker`, `check`, and `routes`, installed with the package
-- **Take only what you open** - Import `economy/ops` and the React hooks never load; the doors are independent, not stacked
-- **Flat, not layered** - No door is beneath another. `economy/app` assembles, `economy/money` builds amounts, `economy/auth` says who is calling — three pieces, one level
-- **Generated from a manifest** - `manifest.json` is the door list; `src/` is rebuilt from it wholesale and never hand-edited
+- **One dependency, twenty-four doors:** each door is a one-line re-export of a package that also
+  publishes on its own.
+- **The `economy` command:** `dev`, `serve`, `worker`, `check` and `routes`, installed with the
+  package.
+- **Take only what you open:** import `economy/ops` and the React hooks never load.
+- **Flat, not layered:** no door sits beneath another.
+- **Generated from a manifest:** `manifest.json` is the door list, and `src/` is rebuilt from it
+  rather than hand-edited.
 
 ## Installation
 
@@ -60,32 +63,32 @@ economy serve        # production: refuses every dev stand-in before it binds
 
 ### The doors
 
-| Door                              | What it is for                                                                             |
-| --------------------------------- | ------------------------------------------------------------------------------------------ |
-| `@pwngh/economy/app`              | `createApp` and `withDev`: one module file assembled into a running app                    |
-| `@pwngh/economy/module`           | The module contract tooling reads: seam types, the resolver, the compile, boot errors      |
-| `@pwngh/economy/ops`              | The fourteen operation constructors and the names that read an outcome                     |
-| `@pwngh/economy/auth`             | Who is calling: bearer resolvers, JWKS, API keys, dev tokens, actors                       |
-| `@pwngh/economy/money`            | `credits`, `usd`, and the typed face over a `CREDIT:600.00` wire amount                    |
-| `@pwngh/economy/money/rate`       | Converting credits to dollars and back, at a rate that carries its own id                  |
-| `@pwngh/economy/money/bps`        | Basis points: a fee taken off a price, a split paid across recipients                      |
-| `@pwngh/economy/money/wire-value` | Reading and writing the `CREDIT:600.00` wire form itself                                   |
-| `@pwngh/economy/receipt`          | A signed, chain-bound record of one transaction that a client holds                        |
-| `@pwngh/economy/client`           | The typed `/v1` HTTP client, for a service that calls the economy                          |
-| `@pwngh/economy/events`           | The event roster and its narrowing guards, for post-commit handlers                        |
-| `@pwngh/economy/webhook`          | Signing and verifying an inbound provider callback                                         |
-| `@pwngh/economy/test`             | `openTestEconomy`: the same app over deterministic ports and personas                      |
-| `@pwngh/economy/conformance`      | The five suites that hold a store, cache, limiter, dispatcher or processor to its contract |
-| `@pwngh/economy/ui`               | React storefront hooks — `useWallet`, `useEntitlements`, and friends                       |
-| `@pwngh/economy/ui/core`          | The same reads without React, for any other view layer                                     |
-| `@pwngh/economy/cli`              | The `economy` verbs as functions, for scripts that drive them                              |
-| `@pwngh/economy/postgres`         | Keep the ledger in PostgreSQL: one call, with the pool and schema gate inside              |
-| `@pwngh/economy/mysql`            | The same store in MySQL, with the InnoDB contention designed out                           |
-| `@pwngh/economy/mysql/mariadb`    | The same store again on MariaDB's pipelining wire, a one-line swap                         |
-| `@pwngh/economy/redis`            | The read-through cache in front of the store, and the rate limiter at the edge             |
-| `@pwngh/economy/sqs`              | Deliver committed events to Amazon SQS, standard queue or FIFO                             |
-| `@pwngh/economy/adapters/express` | Mount a running economy on Express, raw body first                                         |
-| `@pwngh/economy/adapters/fastify` | Mount on Fastify, raw bytes inside the plugin's encapsulation                              |
+| Door                              | What it is for                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------------- |
+| `@pwngh/economy/app`              | `createApp` and `withDev`: one module file assembled into a running app               |
+| `@pwngh/economy/module`           | The module contract tooling reads: seam types, the resolver, the compile, boot errors |
+| `@pwngh/economy/ops`              | The fourteen operation constructors and the names that read an outcome                |
+| `@pwngh/economy/auth`             | Decide who is allowed to move money                                                   |
+| `@pwngh/economy/money`            | Money, rates, and basis points as typed values                                        |
+| `@pwngh/economy/money/rate`       | Converting credits to dollars and back, at a rate that carries its own id             |
+| `@pwngh/economy/money/bps`        | Basis points: a fee taken off a price, a split paid across recipients                 |
+| `@pwngh/economy/money/wire-value` | Reading and writing the `CREDIT:600.00` wire form itself                              |
+| `@pwngh/economy/receipt`          | Tamper-evident receipts for committed transactions                                    |
+| `@pwngh/economy/client`           | A typed client for a remote economy                                                   |
+| `@pwngh/economy/events`           | Handle economy events with exact types                                                |
+| `@pwngh/economy/webhook`          | Verify inbound provider callbacks                                                     |
+| `@pwngh/economy/test`             | Run a real Economy app in tests                                                       |
+| `@pwngh/economy/conformance`      | Test your own store against the contract                                              |
+| `@pwngh/economy/ui`               | React hooks for an economy storefront                                                 |
+| `@pwngh/economy/ui/core`          | The same reads without React, for any other view layer                                |
+| `@pwngh/economy/cli`              | Run and inspect an Economy app                                                        |
+| `@pwngh/economy/postgres`         | Store an economy ledger in PostgreSQL                                                 |
+| `@pwngh/economy/mysql`            | Store an economy ledger in MySQL or MariaDB                                           |
+| `@pwngh/economy/mysql/mariadb`    | The same store again on MariaDB's pipelining wire, a one-line swap                    |
+| `@pwngh/economy/redis`            | Cache and rate limit an economy with Redis                                            |
+| `@pwngh/economy/sqs`              | Deliver economy events through Amazon SQS                                             |
+| `@pwngh/economy/adapters/express` | Mount a running economy on Express, raw body first                                    |
+| `@pwngh/economy/adapters/fastify` | Mount on Fastify, raw bytes inside the plugin's encapsulation                         |
 
 Every door also publishes as its own package — `@pwngh/economy/money` is `@pwngh/economy-money`.
 Depend on this one to get all of them and the command; depend on a single package when that is all

@@ -1,16 +1,15 @@
 # conformance
 
-Hold a store, cache, rate limiter, dispatcher or processor to its contract.
+The port test suites for [`@pwngh/economy`](../economy). `conformance` runs your own store, cache,
+limiter, dispatcher or processor through the cases the built-in ones pass.
 
 ## Features
 
-- **One suite per port.** Five run functions, each taking a factory for the thing under test.
-- **An oracle, not a checklist.** Every suite runs the same workload against your implementation
-  and against a fresh in-memory one, then compares the reads.
-- **Capabilities are resolved, not trusted.** A capability you declare but do not carry fails the
-  suite naming it; one you do not declare registers a skip naming what it needed.
-- **A skip says what it wanted.** A run against an unreachable backend reports what it did not
-  prove rather than passing quietly.
+- **Five suites, one per port:** store, cache, rate limiter, dispatcher, processor.
+- **The store suite runs against an oracle:** the same workload on your store and on the in-memory
+  one, reads compared.
+- **The store suite checks what you declare:** a capability your store does not have fails the
+  suite; [one you leave out](#declaring-what-you-carry) skips its cases.
 
 ## Installation
 
@@ -20,7 +19,7 @@ npm i @pwngh/economy
 
 ## Usage
 
-Hand a suite a factory. It registers its cases under `node:test` and runs them.
+Give a suite a factory. It adds its cases to `node:test` and runs them.
 
 ```ts
 import { runStoreConformance } from '@pwngh/economy/conformance';
@@ -32,9 +31,9 @@ runStoreConformance('my-store', () => openMyStore(), {
 
 ### Declaring what you carry
 
-The suite reads your store to decide what it offers, and compares that against what you declared.
-A disagreement fails, in both directions, so the declaration is a claim being checked rather than
-configuration being obeyed.
+Store suite only. It looks at your store to see what it actually offers, then checks that against
+what you declared. Either kind of mismatch fails. What you declare is a claim the suite checks,
+not a switch it obeys.
 
 ```ts
 runStoreConformance('my-store', () => openMyStore(), {
@@ -60,16 +59,16 @@ runProcessorConformance('my-processor', () => openMyProcessor());
 
 ### What this package is not
 
-It is not a test runner and not a benchmark. It registers cases under `node:test` and reports
-what your implementation answered, and it says nothing about how fast it answered.
+It is not a test runner and not a benchmark. It adds cases to `node:test` and tells you whether
+your code gave the right answers. It says nothing about how fast.
 
-It does not open a database for you. Every suite takes a factory because connecting, migrating
-and tearing down are yours.
+It will not open a database for you. Every suite takes a factory, so connecting, migrating and
+cleaning up stay yours.
 
 ## Related Packages
 
 - [`@pwngh/economy`](../economy) — the umbrella every door is reached through
-- [`@pwngh/economy-postgres`](../postgres) — a ledger store this suite certifies
+- [`@pwngh/economy-postgres`](../postgres) — a ledger store that passes these suites
 - [`@pwngh/economy-mysql`](../mysql) — the same, on MySQL or MariaDB
 
 ## License

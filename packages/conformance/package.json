@@ -1,7 +1,7 @@
 {
   "name": "@pwngh/economy-conformance",
   "version": "0.1.0",
-  "description": "Hold a store, cache, rate limiter, dispatcher or processor to its contract",
+  "description": "Test your own store against the contract",
   "license": "MIT",
   "author": "Preston Neal",
   "type": "module",
