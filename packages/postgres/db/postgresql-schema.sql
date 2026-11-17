@@ -17,7 +17,7 @@
 -- ============================================================================
 create table accounts (
   id         text        primary key,
-  kind       text        not null check (kind in ('spendable', 'earned', 'promo', 'escrow', 'system')),
+  kind       text        not null check (kind in ('spendable', 'earned', 'promo', 'escrow', 'reserved', 'system')),
   currency   text        not null check (currency in ('CREDIT', 'USD')),
   created_at timestamptz not null default now(),
   -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
@@ -644,7 +644,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('18');
+insert into schema_meta (version) values ('19');
 
 -- Deployed at-a-glance column docs (visible via \d+); the banners above carry the depth.
 comment on column accounts.id is 'Account id; platform:<name> or usr_<uuid>:<kind>.';

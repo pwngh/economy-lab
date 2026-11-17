@@ -16,7 +16,7 @@ import { baseOf, currency, SYSTEM, walletKindOf } from '#src/accounts.ts';
 import { VELOCITY_CURRENCY } from '#src/trust.ts';
 import { byCodeUnit, fromHex } from '#src/bytes.ts';
 import { collapseEntitlementGrants } from '#src/entitlements.ts';
-import { metaString, metaNumber } from '#src/meta.ts';
+import { metaString, metaNumber, holdReleaseLotFields } from '#src/meta.ts';
 import { sha256Digest } from '#src/digest.ts';
 
 import type { Amount, Currency } from '#src/money.ts';
@@ -726,6 +726,7 @@ function* lotsOfPosting(
       source: metaString(row.meta, 'source', 'unknown'),
       toppedUpAt: row.postedAt,
       maturesAt: metaNumber(row.meta, 'maturesAt', row.postedAt),
+      ...holdReleaseLotFields(account, row.meta),
     };
   }
 }

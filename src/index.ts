@@ -88,6 +88,14 @@ import type {
 // Ports. createEconomy is sync over a finished bag. openPorts is the sole env-to-bag path, and it
 // shares every decision with preflight and describeEnv (defined below).
 export { createEconomy } from '#src/economy.ts';
+export { createBalanceHolds } from '#src/balance-holds.ts';
+export type {
+  BalanceHolds,
+  BalanceHoldResult,
+  BalanceAvailability,
+  PlaceBalanceHold,
+  ReleaseBalanceHold,
+} from '#src/balance-holds.ts';
 export { createSubmitCoalescer } from '#src/batching.ts';
 export type { CoalescerOptions, SubmitCoalescer } from '#src/batching.ts';
 export { createWorker, DEFAULT_SWEEP_LIMIT } from '#src/worker/index.ts';

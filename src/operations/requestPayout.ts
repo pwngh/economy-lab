@@ -145,6 +145,7 @@ async function reserveAndOpen(
     ),
     meta: {
       kind: 'requestPayout',
+      maturityAt: ctx.clock.now(),
       rateId,
       sagaId,
       payoutUsd: encodeAmount(payoutUsd),

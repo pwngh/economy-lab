@@ -87,7 +87,7 @@ CREATE TABLE accounts (
      kind       VARCHAR(16)  NOT NULL,
      currency   VARCHAR(8)   NOT NULL,
      created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-     CHECK (kind IN ('spendable', 'earned', 'promo', 'escrow', 'system')),
+     CHECK (kind IN ('spendable', 'earned', 'promo', 'escrow', 'reserved', 'system')),
      CHECK (currency IN ('CREDIT', 'USD')),
      -- Lets legs carry a composite FK to (id, currency), so a leg's currency must match its account's.
      UNIQUE KEY accounts_id_currency_uq (id, currency)
@@ -651,4 +651,4 @@ CREATE TABLE schema_meta (
    ) COMMENT='Single-row schema version stamp, checked at startup.';
 -- = SCHEMA_VERSION (src/schema.ts) and the Postgres stamp. No trailing comment on the INSERT
 -- line: the statement splitter reads line ends for the delimiter.
-INSERT INTO schema_meta (version) VALUES ('18');
+INSERT INTO schema_meta (version) VALUES ('19');

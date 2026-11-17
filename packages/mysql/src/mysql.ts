@@ -64,7 +64,11 @@ import {
   decodeLegs,
   encodeOperation,
 } from '@pwngh/economy-lab/sql-kit';
-import { metaString, metaNumber } from '@pwngh/economy-lab/store-kit';
+import {
+  metaString,
+  metaNumber,
+  holdReleaseLotFields,
+} from '@pwngh/economy-lab/store-kit';
 import {
   assertMoneyConformant,
   assertSchemaCurrent,
@@ -860,6 +864,7 @@ async function* timelineOf(
         source: metaString(meta, 'source', 'unknown'),
         toppedUpAt: Number(row.posted_at),
         maturesAt: metaNumber(meta, 'maturesAt', Number(row.posted_at)),
+        ...holdReleaseLotFields(account, meta),
       };
       if (yielded >= lotLimit) {
         return;

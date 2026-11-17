@@ -150,7 +150,7 @@ export { fromBase64Url } from '#src/bytes.ts';
  * caller's `fallback` otherwise. Kept free of SQL and store specifics so a non-SQL store never
  * imports engine code for a plain JSON lookup.
  */
-export { metaString } from '#src/meta.ts';
+export { metaString, holdReleaseLotFields } from '#src/meta.ts';
 
 /**
  * Reads one field out of a posting's free-form meta, returning it only when it is a number and the
@@ -205,7 +205,7 @@ export { decodeStoredOperation } from '#src/wire-contract.ts';
 export { VELOCITY_CURRENCY } from '#src/trust.ts';
 
 /**
- * The wallet kinds {@link walletKindOf} can return: `spendable`, `earned`, `promo`, and `escrow`.
+ * The wallet kinds {@link walletKindOf} can return: `spendable`, `earned`, `promo`, `escrow`, and `reserved`.
  * A category, not a currency — the currency of any money movement comes from the amount itself.
  */
 export type { AccountKind } from '#src/accounts.ts';
