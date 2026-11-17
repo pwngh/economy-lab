@@ -217,6 +217,36 @@ test('a numeric flag admits what the environment admits, and names the rule when
   }
 });
 
+test('the dev banner is printed only once shutdown can handle a signal', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'economy-ready-signal-'));
+  const cwd = process.cwd();
+  let handled = false;
+  const out = {
+    write: (text: string) => {
+      if (text.startsWith('economy dev — ')) {
+        handled = process.emit('SIGTERM');
+        // Before the fix the banner preceded the handler. Drain on the next turn so that
+        // regression fails the assertion instead of leaving the server running.
+        if (!handled) setImmediate(() => process.emit('SIGTERM'));
+      }
+      return true;
+    },
+  };
+  process.chdir(dir);
+  try {
+    await withoutSelectedBackends(async () => {
+      const code = await runEconomy(['dev', '--port', '0'], {
+        stdout: out,
+        stderr: { write: () => true },
+      });
+      assert.equal(code, 0);
+      assert.equal(handled, true, 'the banner preceded the shutdown handler');
+    });
+  } finally {
+    process.chdir(cwd);
+  }
+});
+
 // runEconomy is documented as never calling process.exit so a host can drive the CLI in-process.
 // In that path the watcher and the signal handlers outlived the run: the FSWatcher held the host's
 // event loop open and could still fire, building a second app against a service already closed.

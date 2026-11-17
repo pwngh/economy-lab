@@ -186,6 +186,7 @@ function devBanner(
 
 interface Service {
   readonly app: App;
+  readonly banner: string;
   close(): Promise<void>;
 }
 
@@ -200,7 +201,6 @@ async function up(
   args: Args,
   generation: number,
   dev: boolean,
-  out: Sink,
 ): Promise<Service> {
   const mod = await load(args, generation);
   if (args.cmd === 'worker' && mod.worker === false) {
@@ -245,18 +245,14 @@ async function up(
   } else {
     app.startWorker();
   }
-  if (dev && port !== null) {
-    out.write(
-      `${devBanner(mod, truth, host ?? '0.0.0.0', port, workerRole)}\n`,
-    );
-  } else {
-    out.write(
-      `economy ${args.cmd} — ${mod.file}${port === null ? '' : ` on ${host ?? '0.0.0.0'}:${port}`}${workerRole ? ', worker running' : ''}\n`,
-    );
-  }
-  if (args.demo) out.write(`${await seedDemo(app.economy)}\n`);
+  let banner =
+    dev && port !== null
+      ? `${devBanner(mod, truth, host ?? '0.0.0.0', port, workerRole)}\n`
+      : `economy ${args.cmd} — ${mod.file}${port === null ? '' : ` on ${host ?? '0.0.0.0'}:${port}`}${workerRole ? ', worker running' : ''}\n`;
+  if (args.demo) banner += `${await seedDemo(app.economy)}\n`;
   return {
     app,
+    banner,
     close: async () => {
       // Node's listener is closed by app.close() with this same budget; the Bun and Deno legs are
       // not registered there, so they are drained here rather than left to wait unbounded.
@@ -451,7 +447,7 @@ async function runServiceUnderEnv(
   let generation = 0;
   let service: Service;
   try {
-    service = await up(args, generation, args.cmd === 'dev', out);
+    service = await up(args, generation, args.cmd === 'dev');
   } catch (e) {
     // One shape for all three runtimes: Node raises it, and the Fetch legs are normalized onto it
     // at the bind, where the port asked for is still known.
@@ -494,7 +490,8 @@ async function runServiceUnderEnv(
           out.write(`\n${args.file} changed — restarting\n`);
           await service.close();
           try {
-            service = await up(args, (generation += 1), true, out);
+            service = await up(args, (generation += 1), true);
+            out.write(service.banner);
           } catch (e) {
             err.write(`${e instanceof Error ? e.message : String(e)}\n`);
             if (EconomyModuleError.is(e))
@@ -503,6 +500,9 @@ async function runServiceUnderEnv(
         })
       : null;
   try {
+    // A reader can signal as soon as this reaches its pipe. Announce readiness only after
+    // the handlers and watcher exist, so that signal drains instead of taking the default exit.
+    out.write(service.banner);
     return await running;
   } finally {
     // Everything this run opened, released once it is over. runEconomy never calls process.exit,
