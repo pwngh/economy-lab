@@ -704,9 +704,12 @@ test('every source file in the tree can be read by a search tool', () => {
   }
 
   assert.deepEqual(unreadable, []);
+  // Recounted from git's tracked tree: 39599ff has 952 matching files, and balance holds adds
+  // three. The former 1010 floor was already above the clean checkout's population. Keep a
+  // floor over authored files without requiring generated or untracked local artifacts.
   assert.ok(
-    examined >= 1010,
-    `read ${examined} files, fewer than the 1010 this gate was written against`,
+    examined >= 955,
+    `read ${examined} files, fewer than the 955 in the clean-checkout baseline`,
   );
 });
 

@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import ts from 'typescript';
 
 import { createEconomy } from '#src/economy.ts';
+import { createBalanceHolds } from '#src/balance-holds.ts';
 import { createServer } from '#src/server.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
 import { SYSTEM, earned, spendable } from '#src/accounts.ts';
@@ -138,6 +139,11 @@ const DOORS: ReadonlyArray<{
   readonly via: string;
   readonly open: (config: Config) => unknown;
 }> = [
+  {
+    name: 'createBalanceHolds',
+    via: 'input.config',
+    open: (config) => createBalanceHolds(bagWith(config)),
+  },
   {
     name: 'createEconomy',
     via: 'ports.config',
@@ -496,6 +502,7 @@ function configCarriers(): string[] {
  * above. The two `Partial<Config>` rows are override bags, which `mergeConfig` bounds.
  */
 const CONFIG_TYPES: Readonly<Record<string, string>> = {
+  'src/balance-holds.ts Dependencies': 'CheckedConfig',
   'src/contract.ts CheckedPorts': 'CheckedConfig',
   'src/contract.ts Ctx': 'CheckedConfig',
   'src/contract.ts WorkerCtx': 'CheckedConfig',
@@ -513,6 +520,8 @@ const CONFIG_TYPES: Readonly<Record<string, string>> = {
 };
 
 const ADMITTED_CARRIERS: Readonly<Record<string, string>> = {
+  'src/balance-holds.ts createBalanceHolds.config':
+    'the published input bag; the constructor checks it before creating Dependencies',
   'src/config.ts checkedConfig.config': 'the check itself',
   'src/config.ts mergeConfig.base':
     'mergeConfig checks the overrides; the base is loadConfig output at every internal call',
@@ -527,6 +536,8 @@ const ADMITTED_CARRIERS: Readonly<Record<string, string>> = {
   'src/maturity.ts isMatured.config':
     'reads one horizon out of a checked config',
   'src/maturity.ts tailSlices.config': 'walks lots against a checked config',
+  'src/maturity.ts earnedSlices.config':
+    'replays earned lots downstream of tailSlices against a checked config',
   'src/maturity.ts collectLots.config': 'walks lots against a checked config',
   'src/operations/subscribe.ts validatedPrice.config':
     'reads the price band off ctx.config, which is checked',
@@ -579,7 +590,7 @@ describe('a finished Config reaches the money path only through the bounds check
       opened += 1;
     }
     assert.equal(opened, DOORS.length);
-    assert.equal(opened, 10, `opened ${opened} doors`);
+    assert.equal(opened, 11, `opened ${opened} doors`);
 
     assert.deepEqual(
       await sellOnce(createEconomy(bagWith(goodConfig()))),
@@ -608,7 +619,7 @@ describe('a finished Config reaches the money path only through the bounds check
       refused.push(entry.name);
     }
     assert.equal(refused.length, DOORS.length);
-    assert.equal(refused.length, 10, `refused at ${refused.length} doors`);
+    assert.equal(refused.length, 11, `refused at ${refused.length} doors`);
   });
 
   test('the doors driven above are exactly the ones src/ declares, by the path each reaches a config', () => {
@@ -620,7 +631,7 @@ describe('a finished Config reaches the money path only through the bounds check
     );
     assert.equal(
       Object.keys(declared).length,
-      10,
+      11,
       `resolved ${Object.keys(declared).length} doors`,
     );
   });
@@ -634,7 +645,7 @@ describe('a finished Config reaches the money path only through the bounds check
     );
     assert.equal(
       Object.keys(resolved).length,
-      13,
+      14,
       `examined ${Object.keys(resolved).length} types`,
     );
   });
@@ -677,6 +688,6 @@ describe('a finished Config reaches the money path only through the bounds check
       [],
       'the admission list names a carrier src/ no longer has',
     );
-    assert.equal(carriers.length, 13, `examined ${carriers.length} carriers`);
+    assert.equal(carriers.length, 15, `examined ${carriers.length} carriers`);
   });
 });

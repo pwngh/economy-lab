@@ -191,7 +191,7 @@ test('every test script in the tree carries the file bound', () => {
   assert.equal(found.length, 21, `read ${found.length} package manifests`);
   assert.equal(
     invocations.length,
-    21,
+    22,
     `examined ${invocations.length} node --test invocations in package scripts`,
   );
 });
@@ -351,7 +351,7 @@ test('no bound inside a test outlives the file bound that cancels the file first
     }
   }
   assert.deepEqual(unresolved, UNRESOLVED_BOUNDS);
-  assert.equal(examined, 39, `examined ${examined} declared bounds`);
+  assert.equal(examined, 41, `examined ${examined} declared bounds`);
   assert.equal(resolved, examined - unresolved.length);
 });
 

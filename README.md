@@ -62,7 +62,7 @@ The wider repository gate is `npm run check`; it additionally needs generated AP
 
 ## Existing ledger workflows
 
-The rest of Economy Lab remains available: wallets, marketplace sales, refunds, subscriptions, payout processing, and integrity checks. The existing local service and worker use the module at [economy/app.ts](economy/app.ts).
+The rest of Economy Lab remains available: wallets, marketplace sales, refunds, subscriptions, payout processing, and integrity checks. The existing worker runs 16 sweeps; it and the local service use the module at [economy/app.ts](economy/app.ts).
 
 ```sh
 npm run dev          # existing local development service
