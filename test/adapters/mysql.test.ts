@@ -22,7 +22,16 @@ import {
   mysqlStore,
 } from '@pwngh/economy-mysql';
 import { createMariadbPool } from '@pwngh/economy-mysql/mariadb';
-import { spendable } from '#src/accounts.ts';
+import {
+  balanceHoldAccount,
+  earned,
+  spendable,
+  SYSTEM,
+} from '#src/accounts.ts';
+import { createBalanceHolds } from '#src/balance-holds.ts';
+import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
+import { toAmount } from '#src/money.ts';
+import { SCHEMA_VERSION } from '#src/schema.ts';
 import {
   makeIsolatedMysqlStore,
   testMysqlUrl,
@@ -31,9 +40,13 @@ import {
   describeEngine,
   pinEngineGateRoster,
 } from '#test/support/engine-gate.ts';
-import { fixedClock, seededDigest } from '#test/support/capabilities.ts';
+import {
+  fixedClock,
+  seededDigest,
+  testConfig,
+} from '#test/support/capabilities.ts';
 
-import type { MysqlPool } from '@pwngh/economy-mysql';
+import type { MysqlConnection, MysqlPool } from '@pwngh/economy-mysql';
 
 // Empty when nothing names MySQL, which the factories below hand to the driver: the open refuses,
 // and runStoreConformance's probe turns that refusal into a skip on every test it owns.
@@ -119,6 +132,176 @@ describeEngine(
     }
   },
 );
+
+describeEngine('mysql', 'MySQL case-sensitive account and hold IDs', (rig) => {
+  for (const driver of ['mysql2', 'mariadb'] as const) {
+    rig.test(
+      `${driver}: one posting and case-distinct holds keep balances separate`,
+      async (at) => {
+        const digest = seededDigest(1);
+        let pool: MysqlPool | undefined;
+        const store = await makeIsolatedMysqlStore({
+          url: at,
+          digest,
+          clock: fixedClock(0),
+          driver,
+          connectionLimit: 2,
+          wrapPool: (created) => {
+            pool = created;
+            return created;
+          },
+        });
+        try {
+          assert.ok(pool);
+          const callerPool = pool;
+          const assertCallerSessions = async () => {
+            const connections: MysqlConnection[] = [];
+            try {
+              connections.push(await callerPool.getConnection());
+              connections.push(await callerPool.getConnection());
+              for (const connection of connections) {
+                const [session] = await connection.query(
+                  `SELECT @@character_set_client AS client, @@character_set_results AS results,
+                          @@collation_connection AS collation`,
+                );
+                const original = (
+                  session as Array<{
+                    client: string;
+                    results: string;
+                    collation: string;
+                  }>
+                )[0]!;
+                assert.deepEqual(
+                  [original.client, original.results, original.collation],
+                  ['utf8mb4', 'utf8mb4', 'utf8mb4_0900_ai_ci'],
+                );
+              }
+            } finally {
+              for (const connection of connections) connection.release();
+            }
+          };
+          // Setup must return both sessions with their original settings.
+          await assertCallerSessions();
+          const [routines] = await pool.query(
+            `SELECT ROUTINE_NAME AS name, COLLATION_CONNECTION AS creation_collation
+             FROM information_schema.ROUTINES
+             WHERE ROUTINE_SCHEMA = DATABASE()
+               AND ROUTINE_NAME IN ('account_balance', 'post_entries', 'post_entry', 'trust_record')
+             ORDER BY ROUTINE_NAME`,
+          );
+          assert.deepEqual(
+            (
+              routines as Array<{ name: string; creation_collation: string }>
+            ).map((routine) => [routine.name, routine.creation_collation]),
+            [
+              ['account_balance', 'utf8mb4_0900_bin'],
+              ['post_entries', 'utf8mb4_0900_bin'],
+              ['post_entry', 'utf8mb4_0900_bin'],
+              ['trust_record', 'utf8mb4_0900_bin'],
+            ],
+          );
+          const setupFailure = new Error('injected schema setup failure');
+          const interruptedPool: MysqlPool = {
+            query: (sql, params) => callerPool.query(sql, params),
+            getConnection: async () => {
+              const connection = await callerPool.getConnection();
+              return {
+                query: async (sql, params) => {
+                  // Changing comparison reaches the database; stop before any table changes.
+                  if (/^\s*ALTER DATABASE\b/i.test(sql)) throw setupFailure;
+                  return connection.query(sql, params);
+                },
+                release: () => connection.release(),
+              };
+            },
+            end: () => callerPool.end(),
+          };
+          await assert.rejects(
+            applyMysqlSchema(interruptedPool),
+            (error: unknown) => error === setupFailure,
+          );
+          await assertCallerSessions();
+          const owner = 'usr_Review';
+          const otherOwner = 'usr_review';
+          // Both accounts in one posting also exercise the routine's JSON_TABLE joins.
+          await store.transaction(async (unit) => {
+            await lockAll(unit.ledger, [
+              SYSTEM.OPENING_EQUITY,
+              earned(owner),
+              earned(otherOwner),
+            ]);
+            await postEntry(unit.ledger, {
+              txnId: 'txn_case_distinct_accounts',
+              legs: [
+                debit(SYSTEM.OPENING_EQUITY, toAmount('CREDIT', 3_000n)),
+                credit(earned(owner), toAmount('CREDIT', 1_000n)),
+                credit(earned(otherOwner), toAmount('CREDIT', 2_000n)),
+              ],
+              meta: { kind: 'seed', source: 'card' },
+            });
+          });
+          assert.equal(
+            (await store.ledger.balance(earned(owner))).minor,
+            1_000n,
+          );
+          assert.equal(
+            (await store.ledger.balance(earned(otherOwner))).minor,
+            2_000n,
+          );
+
+          const holds = createBalanceHolds({
+            store,
+            config: testConfig(),
+            digest,
+          });
+          for (const [holdId, minor] of [
+            ['Review', 100n],
+            ['review', 200n],
+          ] as const) {
+            await holds.place({
+              userId: owner,
+              holdId,
+              amount: toAmount('CREDIT', minor),
+              expiresAt: 10,
+              now: 0,
+            });
+            assert.equal(
+              (await store.ledger.balance(balanceHoldAccount(owner, holdId)))
+                .minor,
+              minor,
+            );
+          }
+          await holds.release({
+            userId: owner,
+            holdId: 'Review',
+            idempotencyKey: 'release_uppercase',
+            now: 10,
+          });
+          assert.equal(
+            (await store.ledger.balance(balanceHoldAccount(owner, 'Review')))
+              .minor,
+            0n,
+          );
+          assert.equal(
+            (await store.ledger.balance(balanceHoldAccount(owner, 'review')))
+              .minor,
+            200n,
+          );
+          const first = await holds.read({ userId: owner, now: 10 });
+          assert.equal(first.available.minor, 800n);
+          assert.equal(first.reserved.minor, 200n);
+          assert.equal(first.total.minor, 1_000n);
+          const second = await holds.read({ userId: otherOwner, now: 10 });
+          assert.equal(second.available.minor, 2_000n);
+          assert.equal(second.reserved.minor, 0n);
+          assert.equal(second.total.minor, 2_000n);
+        } finally {
+          await store.close();
+        }
+      },
+    );
+  }
+});
 
 // GET_LOCK returns 0 when the wait elapsed and NULL on error or kill — both mean the lock is NOT
 // held, so lock must surface a transient conflict (errno 1205) for withTransientRetry rather than
@@ -255,7 +438,10 @@ describeEngine('mysql', 'mysql(url): the one-call open', (rig) => {
       try {
         await admin.query(`CREATE DATABASE \`${probe}\``);
         const probeUrl = at.replace(/\/[^/?]+(\?|$)/, `/${probe}$1`);
-        await assert.rejects(mysql(probeUrl), /schema version 19/);
+        await assert.rejects(
+          mysql(probeUrl),
+          new RegExp(`schema version ${SCHEMA_VERSION}`),
+        );
       } finally {
         await admin.query(`DROP DATABASE IF EXISTS \`${probe}\``);
         await admin.end();
@@ -264,11 +450,13 @@ describeEngine('mysql', 'mysql(url): the one-call open', (rig) => {
   );
 });
 
-// Eight tests over four suites, whatever the environment holds. Before this file registered them
+// Ten tests over five suites, whatever the environment holds. Before this file registered them
 // unconditionally an unconfigured run reported none of them and no line saying so.
 pinEngineGateRoster([
   "bigNumberStrings returns every numeric result as a string › mysql2: raw SELECT 1 comes back as the string '1', pool and connection alike",
   "bigNumberStrings returns every numeric result as a string › mariadb: raw SELECT 1 comes back as the string '1', pool and connection alike",
+  'MySQL case-sensitive account and hold IDs › mysql2: one posting and case-distinct holds keep balances separate',
+  'MySQL case-sensitive account and hold IDs › mariadb: one posting and case-distinct holds keep balances separate',
   'MySQL ledger.lock GET_LOCK return handling › throws a transient conflict (errno 1205) when GET_LOCK returns 0',
   'MySQL ledger.lock GET_LOCK return handling › throws a transient conflict (errno 1205) when GET_LOCK returns null',
   'MySQL ledger.lock GET_LOCK return handling › resolves when GET_LOCK returns 1 (the lock is held)',

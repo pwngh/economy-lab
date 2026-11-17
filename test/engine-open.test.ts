@@ -13,10 +13,10 @@
 /**
  * The SQL open path's fail-fast rules, all provable with no live database. A host that accepts
  * the socket and never speaks must end the open on a bound instead of hanging it. A failed
- * `schema_meta` read must tell an unreachable database from an un-migrated one, because the
- * un-migrated message tells the operator to re-apply the schema — advice that costs data on a
- * database that was merely down. And a pool must carry an 'error' listener, because a dropped
- * idle connection emits one and an unlistened 'error' event ends the process.
+ * `schema_meta` read must tell an unreachable database from one needing a schema migration.
+ * Neither a missing stamp nor an old version means existing data is safe to erase. And a pool
+ * must carry an 'error' listener, because a dropped idle connection emits one and an unlistened
+ * 'error' event ends the process.
  */
 
 import { describe, test } from 'node:test';
@@ -35,6 +35,7 @@ import {
 } from '@pwngh/economy-mysql';
 import { loadPg, openPgPool } from '@pwngh/economy-postgres/driver';
 import { DEFAULT_CONNECT_TIMEOUT_MS } from '#src/engines/sql-shared.ts';
+import { assertSchemaCurrent, SCHEMA_VERSION } from '#src/schema.ts';
 
 import type { PgPool } from '@pwngh/economy-postgres';
 import type { MysqlPool } from '@pwngh/economy-mysql';
@@ -282,20 +283,50 @@ describe('the SQL open path bounds its connect wait', () => {
 });
 
 describe('a failed schema_meta read tells unreachable from un-migrated', () => {
+  const protectsExistingData = (error: Error) => {
+    assert.match(
+      error.message,
+      /plan a data-preserving migration before upgrading/,
+    );
+    assert.match(error.message, /`make db-migrate` drops and recreates tables/);
+    assert.match(
+      error.message,
+      /use it only to reset an empty or disposable database/,
+    );
+    assert.doesNotMatch(error.message, /Re-apply the schema with/);
+    return true;
+  };
+
   const unmigrated = (error: Error) => {
     assert.match(error.message, /no schema_meta row/);
-    assert.match(error.message, /db-migrate/);
-    return true;
+    return protectsExistingData(error);
   };
 
   const unreachable = (cause: Error) => (error: Error) => {
     assert.match(error.message, /unreachable/);
-    // Only the un-migrated verdict may send an operator to the migration command.
+    // A connection failure needs no schema reset or migration advice.
     assert.equal(/db-migrate/.test(error.message), false);
     assert.equal(/no schema_meta row/.test(error.message), false);
     assert.equal(error.cause, cause);
     return true;
   };
+
+  test('version 19 needs a planned migration that preserves existing data', () => {
+    assert.throws(
+      () => assertSchemaCurrent('19', 'mysql'),
+      (error: Error) => {
+        assert.match(error.message, /is at schema version 19/);
+        assert.ok(
+          error.message.includes(`expects schema version ${SCHEMA_VERSION}`),
+        );
+        return protectsExistingData(error);
+      },
+    );
+  });
+
+  test('a missing schema stamp does not make the database safe to reset', () => {
+    assert.throws(() => assertSchemaCurrent(null, 'mysql'), unmigrated);
+  });
 
   test('postgres: a reachable database with no schema_meta row is un-migrated', async () => {
     await assert.rejects(

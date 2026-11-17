@@ -43,8 +43,8 @@ interface MariadbPool {
  * returns.
  *
  * The pool matches the mysql2 pool's configuration. Big integer and decimal columns come back
- * as exact strings (the engine converts them to bigint). The connection collation is pinned to
- * the schema's utf8mb4 default. `connectionLimit` caps the pool exactly as on `createMysqlPool`
+ * as exact strings (the engine converts them to bigint). Connections use UTF-8; the schema
+ * separately pins binary comparison. `connectionLimit` caps the pool as on `createMysqlPool`
  * and defaults to 10. Each in-flight transaction holds one connection, so size the pool to at
  * least the number of concurrent submits. The URL must carry no query parameters. This factory
  * maps the URL to driver config by hand, and throws rather than silently drop options mysql2

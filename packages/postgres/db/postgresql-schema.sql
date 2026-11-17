@@ -644,7 +644,7 @@ create or replace trigger account_balances_integrity
 -- src/schema.ts together, whenever this file changes.
 -- ============================================================================
 create table schema_meta (version text not null);
-insert into schema_meta (version) values ('19');
+insert into schema_meta (version) values ('20');
 
 -- Deployed at-a-glance column docs (visible via \d+); the banners above carry the depth.
 comment on column accounts.id is 'Account id; platform:<name> or usr_<uuid>:<kind>.';
