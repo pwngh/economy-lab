@@ -1,23 +1,8 @@
 # Economy Lab
 
-Economy Lab is a TypeScript double-entry ledger for credits, seller earnings, and payouts. It tracks which earnings are still waiting, which are available for payout, and which are set aside in a hold. Its balance-holds demo uses invented data to check the same rules on memory, PostgreSQL, MySQL, and the HTTP store adapter.
+Economy Lab is a TypeScript double-entry ledger for credits, seller earnings, and payouts. Earnings wait before they become available for payout, and a hold sets aside funds from that available balance. Its balance-holds demo uses invented data to check the same rules on memory, PostgreSQL, MySQL, and the HTTP store adapter.
 
-## How the balances work
-
-| Balance   | Meaning                                                          |
-| --------- | ---------------------------------------------------------------- |
-| Pending   | Earnings that have not finished their configured waiting period. |
-| Available | Earnings that have finished that wait and are not held.          |
-| Reserved  | Earnings set aside in balance holds.                             |
-| Total     | The sum of pending, available, and reserved earnings.            |
-
-A hold moves available earnings into reserved. A release moves them back without starting another waiting period. Both movements are ledger entries, so the balances can be rebuilt from the record of what happened. The rule is `pending + available + reserved = total`.
-
-For example, a seller earns 1,000 minor units. Once they become available, a hold of 700 leaves 300 available for payout. A request for 301 is refused; a request for 300 succeeds. The remaining total is then 700, all reserved.
-
-An accepted payout leaves this total and enters Economy Lab's existing payout process. Its separate payout reserve is not included in the `reserved` balance above. Debt, payout minimums, and other payout rules can still block a request even when enough earnings are available.
-
-If a payout is reversed or the worker gives up on it, the returned credits go back to `earned` and wait again. The usual configuration uses the `default` period. A host that supplies a separate `unknown` period uses that instead, because the return has no funding-source tag. A hold release returns funds as available immediately.
+A recorded feature run passed 52 tests with no skips across four adapters.
 
 ## Run the demo and tests
 
@@ -35,6 +20,8 @@ balance proof: passed with memory, PostgreSQL, MySQL, and HTTP
 
 The runner mounts the checkout read-only inside its test container. It publishes no database ports, does not read `.env`, and does not use your existing databases. Network access is needed to download npm packages and any Docker images that are not already cached; no account, API key, or paid service is needed.
 
+If the demo stops before the tests, check that Docker is running and that the package and image downloads can complete. If a test fails, its printed scenario name points to the matching case in the test file.
+
 The [demo script](scripts/demo-balances.mjs) runs these [executable scenarios](test/conformance/balance-holds.test.ts), each with separate test data:
 
 1. Add 1,000 units of earnings and advance the supplied time. They are pending before the waiting period ends and available at its boundary.
@@ -43,9 +30,28 @@ The [demo script](scripts/demo-balances.mjs) runs these [executable scenarios](t
 4. Request two payouts that each need the full available balance. Exactly one succeeds. On each SQL store, a barrier makes both database transactions start before either can take the account lock.
 5. Run repeatable sequences of holds, partial releases, expirations, payouts, and retries. After every step, compare the balances with an independent model and with the ledger entries.
 
+## How the balances work
+
+| Balance   | Meaning                                                          |
+| --------- | ---------------------------------------------------------------- |
+| Pending   | Earnings that have not finished their configured waiting period. |
+| Available | Earnings that have finished that wait and are not held.          |
+| Reserved  | Earnings set aside in balance holds.                             |
+| Total     | The sum of pending, available, and reserved earnings.            |
+
+Your application supplies the waiting-period policy and the current time. The holds API checks the available earnings before it asks the store to record a hold. A hold moves available earnings into reserved. A release moves them back without starting another waiting period. The store records both movements as ledger entries, so the balances can be rebuilt from the record of what happened. The rule is `pending + available + reserved = total`.
+
+For example, a seller earns 1,000 minor units. Once they become available, a hold of 700 leaves 300 available for payout. A request for 301 is refused; a request for 300 succeeds. The remaining total is then 700, all reserved.
+
+An accepted payout leaves this total and enters Economy Lab's existing payout process. Its separate payout reserve is not included in the `reserved` balance above. Debt, payout minimums, and other payout rules can still block a request even when enough earnings are available.
+
+If a payout is reversed or the worker gives up on it, the returned credits go back to `earned` and wait again. The usual configuration uses the `default` period. A host that supplies a separate `unknown` period uses that instead, because the return has no funding-source tag. A hold release returns funds as available immediately.
+
 ## Use the library
 
-Create the holds API with the same `store`, `config`, and `digest` as your Economy instance. The account must already have enough available earnings; this example assumes at least 700. The timestamps are invented epoch milliseconds, passed explicitly so the example needs no real timer.
+Create the holds API with the same `store`, `config`, and `digest` as your Economy instance. The `store` keeps ledger entries, `config` supplies the waiting-period rules, and `digest` computes hashes for transaction IDs and entry verification.
+
+The account must already have enough available earnings; this example assumes at least 700. The timestamps are invented epoch milliseconds, passed explicitly so the example needs no real timer.
 
 ```ts
 import { createBalanceHolds, toAmount } from '@pwngh/economy-lab';
@@ -80,15 +86,15 @@ Use a new `holdId` for each new hold, even after an earlier hold is fully releas
 
 User and hold IDs preserve case: `Review` and `review` identify different holds. The shared tests check that case-distinct owners also keep separate balances.
 
-Successful `place` and `release` calls return a receipt with `committed` or `duplicate` status. Invalid input, conflicting retries, insufficient funds, or broken history throw a typed `EconomyError`.
+Successful `place` and `release` calls return a receipt with `committed` or `duplicate` status. `expire()` returns an array of release receipts. Invalid input, conflicting retries, insufficient funds, or broken history throw a typed `EconomyError`.
 
-Continue to request payouts through `economy.submit(requestPayout(...))`. Holds and payouts use the same account lock, and payout requests retain their existing idempotency checks. Your application must authorize callers, verify events, supply a consistent clock and policy, and schedule expiry. Each hold expires in its own transaction, so an interrupted sweep can be retried to finish the remaining holds.
+Request payouts through `economy.submit(requestPayout(...))`. Holds and payouts use the same account lock, and payout requests retain their existing idempotency checks. Your application must authorize callers, verify events, supply a consistent clock and policy, and schedule expiry. Each hold expires in its own transaction, so an interrupted sweep can be retried to finish the remaining holds.
 
 ## What the tests show
 
 `npm run demo:balances` is the complete feature check: it fails if database coverage is missing. Once dependencies and packages are built, `npm run test:balances` uses configured stores instead. That shorter command reports unavailable SQL stores as skips unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
 
-A recorded feature run passed 52 tests with no skips across four adapters. Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 29 seconds, excluding installation and builds.
+Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 29 seconds, excluding installation and builds.
 
 These checks exercise a reproducible sample of operation sequences. They are evidence of correctness for those cases, not a throughput benchmark or a proof of every possible sequence.
 
