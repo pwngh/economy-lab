@@ -87,7 +87,7 @@ for an untagged funding source (normally `default`), measured from the return po
 as pending. A [balance-hold release](/economy/concepts/credit-maturity/#balance-holds)
 returns already-matured credit immediately; it does not use this payout-return policy.
 
-That force-fail reversal and the operator's `reversePayout` share one compare-and-set guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost compare-and-set means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can reverse a `RESERVED` payout before submission. A `SUBMITTED` payout can be reversed only under its provider-failure or timeout rules; a `SETTLED` payout cannot be reversed.
+Worker failure handling and `reversePayout` use the same conditional state update. A reversal posts only if the payout is still in the state it read. If the state changed first, the reversal posts nothing: the worker may have started submission, or another operation may have settled or reversed the payout. The payout may still be in progress. An operator can reverse a `RESERVED` payout before submission. A `SUBMITTED` payout can be reversed only under its provider-failure or timeout rules; a `SETTLED` payout cannot be reversed.
 
 ## The invariant
 
