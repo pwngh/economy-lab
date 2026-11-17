@@ -78,8 +78,8 @@ is your call. Only the pool `mysql(url)` opened for you is ended by `close()`.
   recreates; it is a setup and CI verb, never an application one.
 - **It does not read `DATABASE_URL` for you.** The lab reports what the environment names, but
   the store arrives through `ports`, from this call.
-- **It does not run on MySQL 5.7.** The schema uses `JSON_TABLE` and the `utf8mb4_0900_ai_ci`
-  collation. MySQL 8.0 or a MariaDB that speaks both.
+- **Requires MySQL 8.0.17 or newer.** The schema uses `JSON_TABLE` and the `utf8mb4_0900_bin`
+  collation to keep identifiers case-sensitive. Tests use MySQL 8.4 with both supported drivers.
 - **It does not accept `REPEATABLE READ`.** The store sets `READ COMMITTED` on every connection
   it borrows. A server default that is enforced against change is not supported.
 

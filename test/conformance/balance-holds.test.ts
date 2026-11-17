@@ -9,7 +9,7 @@ import '#test/support/dist-guard.ts';
 import { after, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createBalanceHolds } from '#src/balance-holds.ts';
-import { earned, SYSTEM } from '#src/accounts.ts';
+import { balanceHoldAccount, earned, SYSTEM } from '#src/accounts.ts';
 import { credit, debit, lockAll, postEntry } from '#src/ledger.ts';
 import { checkedConfig } from '#src/config.ts';
 import { createEconomy } from '#src/economy.ts';
@@ -33,9 +33,9 @@ const config = checkedConfig({
 });
 let fixtureId = 0;
 
-function fixture(store: Store) {
+function fixture(store: Store, ownerId?: string) {
   const fixtureNumber = ++fixtureId;
-  const userId = `usr_balance_${fixtureNumber}`;
+  const userId = ownerId ?? `usr_balance_${fixtureNumber}`;
   let time = 0;
   let id = 0;
   const holds = createBalanceHolds({ store, config, digest: seededDigest(1) });
@@ -307,6 +307,162 @@ for (const adapter of adapterMatrix(process.env)) {
       assert.equal(final.pending.minor, 0n);
       assert.equal(final.reserved.minor, 0n);
       assert.equal(await replayTotal(store!, f.userId), 1_000n);
+    });
+
+    test('case-distinct hold IDs reserve, release, and expire independently', async () => {
+      const f = fixture(store!);
+      await f.fund(1_000n, 'instant');
+      const upper = await f.holds.place({
+        userId: f.userId,
+        holdId: 'Review',
+        amount: amount(300n),
+        releaseEvent: 'reviewed',
+        expiresAt: 100,
+        now: 0,
+      });
+      const lower = await f.holds.place({
+        userId: f.userId,
+        holdId: 'review',
+        amount: amount(400n),
+        releaseEvent: 'reviewed',
+        expiresAt: 200,
+        now: 0,
+      });
+      assert.equal(upper.status, 'committed');
+      assert.equal(lower.status, 'committed');
+      assert.notEqual(upper.transactionId, lower.transactionId);
+      assert.deepEqual(await f.holds.read({ userId: f.userId, now: 0 }), {
+        pending: amount(0n),
+        available: amount(300n),
+        reserved: amount(700n),
+        total: amount(1_000n),
+      });
+
+      const released = await f.holds.release({
+        userId: f.userId,
+        holdId: 'Review',
+        idempotencyKey: 'partial',
+        amount: amount(100n),
+        event: 'reviewed',
+        now: 10,
+      });
+      assert.equal(released.amount.minor, 100n);
+      assert.equal(
+        (await store!.ledger.balance(balanceHoldAccount(f.userId, 'Review')))
+          .minor,
+        200n,
+      );
+      assert.equal(
+        (await store!.ledger.balance(balanceHoldAccount(f.userId, 'review')))
+          .minor,
+        400n,
+      );
+      const firstExpiry = await f.holds.expire({ userId: f.userId, now: 100 });
+      assert.deepEqual(
+        firstExpiry.map((receipt) => receipt.amount.minor),
+        [200n],
+      );
+      assert.deepEqual(await f.holds.read({ userId: f.userId, now: 100 }), {
+        pending: amount(0n),
+        available: amount(600n),
+        reserved: amount(400n),
+        total: amount(1_000n),
+      });
+      assert.equal(
+        (await f.holds.expire({ userId: f.userId, now: 199 })).length,
+        0,
+      );
+      const lastExpiry = await f.holds.expire({ userId: f.userId, now: 200 });
+      assert.deepEqual(
+        lastExpiry.map((receipt) => receipt.amount.minor),
+        [400n],
+      );
+      assert.deepEqual(await f.holds.read({ userId: f.userId, now: 200 }), {
+        pending: amount(0n),
+        available: amount(1_000n),
+        reserved: amount(0n),
+        total: amount(1_000n),
+      });
+      assert.equal(await replayTotal(store!, f.userId), 1_000n);
+    });
+
+    test('case-distinct owners have separate balances and holds', async () => {
+      const lower = fixture(store!);
+      const upper = fixture(store!, lower.userId.toUpperCase());
+      await lower.fund(1_000n, 'instant');
+      assert.deepEqual(
+        await upper.holds.read({ userId: upper.userId, now: 0 }),
+        {
+          pending: amount(0n),
+          available: amount(0n),
+          reserved: amount(0n),
+          total: amount(0n),
+        },
+      );
+      await upper.fund(500n, 'instant');
+      for (const [f, minor, expiresAt] of [
+        [lower, 300n, 100],
+        [upper, 200n, 200],
+      ] as const) {
+        await f.holds.place({
+          userId: f.userId,
+          holdId: 'shared',
+          amount: amount(minor),
+          releaseEvent: 'done',
+          expiresAt,
+          now: 0,
+        });
+      }
+      assert.deepEqual(
+        await lower.holds.read({ userId: lower.userId, now: 0 }),
+        {
+          pending: amount(0n),
+          available: amount(700n),
+          reserved: amount(300n),
+          total: amount(1_000n),
+        },
+      );
+      const upperHeld = {
+        pending: amount(0n),
+        available: amount(300n),
+        reserved: amount(200n),
+        total: amount(500n),
+      };
+      assert.deepEqual(
+        await upper.holds.read({ userId: upper.userId, now: 0 }),
+        upperHeld,
+      );
+      const expired = await lower.holds.expire({
+        userId: lower.userId,
+        now: 100,
+      });
+      assert.deepEqual(
+        expired.map((receipt) => receipt.amount.minor),
+        [300n],
+      );
+      assert.deepEqual(
+        await upper.holds.read({ userId: upper.userId, now: 100 }),
+        upperHeld,
+      );
+      await upper.holds.release({
+        userId: upper.userId,
+        holdId: 'shared',
+        idempotencyKey: 'release',
+        event: 'done',
+        now: 101,
+      });
+      for (const [f, minor] of [
+        [lower, 1_000n],
+        [upper, 500n],
+      ] as const) {
+        assert.deepEqual(await f.holds.read({ userId: f.userId, now: 101 }), {
+          pending: amount(0n),
+          available: amount(minor),
+          reserved: amount(0n),
+          total: amount(minor),
+        });
+        assert.equal(await replayTotal(store!, f.userId), minor);
+      }
     });
 
     test('released matured funds are immediately payable without restarting the settlement wait', async () => {

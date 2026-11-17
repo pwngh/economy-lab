@@ -78,6 +78,8 @@ A hold needs an expiry time, a release event, or both. Either a matching event o
 
 Use a new `holdId` for each new hold, even after an earlier hold is fully released. Retry the same opening with the same hold ID. Retry a release with the same `idempotencyKey`: that key identifies one release request for the user across all their holds. A later `now` is allowed on a retry; reusing an identity with different business inputs is refused.
 
+User and hold IDs preserve case: `Review` and `review` identify different holds. The shared tests check that case-distinct owners also keep separate balances.
+
 Successful `place` and `release` calls return a receipt with `committed` or `duplicate` status. Invalid input, conflicting retries, insufficient funds, or broken history throw a typed `EconomyError`.
 
 Continue to request payouts through `economy.submit(requestPayout(...))`. Holds and payouts use the same account lock, and payout requests retain their existing idempotency checks. Your application must authorize callers, verify events, supply a consistent clock and policy, and schedule expiry. Each hold expires in its own transaction, so an interrupted sweep can be retried to finish the remaining holds.
@@ -109,7 +111,7 @@ The [Economy API](https://economy-lab-docs.pages.dev/economy/reference/the-econo
 
 - Holds apply to matured CREDIT earnings. This feature adds no currency conversion, fees, API server, or UI.
 - The host must keep complete hold history in active storage. The API rejects recorded archival when the store exposes archive state; the HTTP adapter cannot report that state. Missing opening entries cause an error. Releasing holds from archived history is not supported.
-- SQL schema version 19 adds the reserved account kind. The demo creates fresh databases. This feature does not automate upgrades of existing databases.
+- SQL schema version 20 makes MySQL identifiers case-sensitive; older schema versions are refused at startup. The demo creates fresh databases. Existing databases need a planned migration; the supplied schema scripts rebuild tables and must not be used to preserve existing data.
 - Balance reads scan earnings history, and finding holds scans account names. Read cost grows with that data; an indexed projection is not implemented.
 - The holds API reads the store directly. If your application caches wallet reads elsewhere, it must invalidate those caches after a hold change or wait for their configured expiry.
 - The host owns event delivery, authorization, clock accuracy, and scheduling. Tests use local databases and fakes; they do not execute a payment through an external provider.

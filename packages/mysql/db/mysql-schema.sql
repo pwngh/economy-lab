@@ -14,11 +14,12 @@
 -- MySQL has no partial index, so each Postgres partial-index predicate folds into the leading
 -- column of the composite key (the *_pending_idx and *_due_idx lead with the filtered column).
 
--- Pin the database default collation FIRST so every table inherits it: JSON_TABLE inside
--- post_entry produces utf8mb4_0900_ai_ci strings, and matching table collations avoid an
--- "Illegal mix of collations" error on its joins. Applying by hand: this mutates the current
--- database's default, so USE the target database first. The collation needs MySQL 8.0+.
-ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci;
+-- Keep opaque identifiers case-sensitive in tables and in JSON_TABLE joins. Stored routines
+-- retain the connection collation used at creation, so pin it before creating them, including
+-- when this file runs through the CLI. The binary collation also preserves trailing spaces.
+-- Applying by hand: USE the target database first. Requires MySQL 8.0.17 or newer.
+SET NAMES utf8mb4 COLLATE utf8mb4_0900_bin;
+ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
 -- Drop stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so re-apply
 -- fails with ER_SP_ALREADY_EXISTS without an explicit drop. (CREATE TABLE below is guarded by the
@@ -651,4 +652,4 @@ CREATE TABLE schema_meta (
    ) COMMENT='Single-row schema version stamp, checked at startup.';
 -- = SCHEMA_VERSION (src/schema.ts) and the Postgres stamp. No trailing comment on the INSERT
 -- line: the statement splitter reads line ends for the delimiter.
-INSERT INTO schema_meta (version) VALUES ('19');
+INSERT INTO schema_meta (version) VALUES ('20');

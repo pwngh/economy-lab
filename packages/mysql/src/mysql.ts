@@ -2936,11 +2936,17 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
     new URL('../db/mysql-schema.sql', import.meta.url),
   );
   const sql = await readFile(path, 'utf8');
-  // The schema file pins the database collation (its leading ALTER DATABASE) before any DROP/CREATE,
-  // so the freshly created tables match the utf8mb4_0900_ai_ci strings JSON_TABLE produces inside
-  // post_entry — the same pin scripts/migrate.sh applies.
-  for (const statement of splitSqlStatements(sql)) {
-    await pool.query(statement);
+  // The schema pins database and routine-creation collations before any DROP/CREATE. This keeps
+  // identifiers distinct in both stored rows and post_entry's JSON_TABLE joins, including when
+  // scripts/migrate.sh applies the same file through the CLI. Keep SET NAMES and routine
+  // creation on one connection; a pool may distribute separate queries across sessions.
+  const connection = await pool.getConnection();
+  try {
+    for (const statement of splitSqlStatements(sql)) {
+      await connection.query(statement);
+    }
+  } finally {
+    connection.release();
   }
 }
 
@@ -2992,8 +2998,8 @@ function splitSqlStatements(sql: string): string[] {
  * pool returns large integer columns (the money columns, stored as 64-bit integers) as strings,
  * which the engine then converts to bigint exactly.
  *
- * The connection collation is pinned to the schema's utf8mb4 default so the strings the posting
- * routine derives from JSON join the table columns without collation errors.
+ * Connections use UTF-8. The schema separately pins binary comparison for stored identifiers
+ * and for the strings the posting routine derives from JSON.
  *
  * `connectionLimit` caps the pool. Each in-flight transaction holds one connection for its whole
  * BEGIN..COMMIT, so a caller driving N concurrent submits must size this to at least N. Left unset,
@@ -3022,10 +3028,9 @@ export async function createMysqlPool(
       ? { connectionLimit: options.connectionLimit }
       : {}),
     connectTimeout: options.connectTimeout ?? DEFAULT_CONNECT_TIMEOUT_MS,
-    // Pin the connection collation to MySQL 8's utf8mb4 default: JSON_TABLE strings inside post_entry
-    // take the connection's collation, and mysql2's default utf8mb4_unicode_ci clashes with the
-    // utf8mb4_0900_ai_ci table columns on every join ("Illegal mix of collations"). applyMysqlSchema
-    // pins the database default to the same collation.
+    // This UTF-8 collation fits the handshake's one-byte ID. UTF8MB4_0900_BIN is ID 309 and cannot
+    // be sent there. The schema sets binary collation when creating tables and routines; their
+    // identifier comparisons remain binary even when called from this connection collation.
     charset: 'UTF8MB4_0900_AI_CI',
   });
 }
