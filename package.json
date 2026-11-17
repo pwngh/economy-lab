@@ -68,7 +68,7 @@
     "CHANGELOG.md",
     "LICENSE.md"
   ],
-  "description": "A provably-solvent credits economy: wallets, payouts, subscriptions, and a marketplace, on one double-entry ledger.",
+  "description": "A double-entry ledger for credits, balance holds, payouts, subscriptions, and marketplace payments.",
   "author": "Preston Neal",
   "license": "MIT",
   "repository": {

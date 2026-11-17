@@ -1,6 +1,6 @@
 ---
 title: 'Request payout'
-summary: 'Open the payout saga: reserve matured earnings for disbursement, subject to minimums and intervals.'
+summary: 'Set aside available seller earnings for a payout. The worker sends the payment later; debt, maturity, minimums, and cooldown rules can decline the request.'
 order: 50
 status: stable
 sourceRefs:
@@ -22,7 +22,7 @@ related:
 import payoutHtml from '../../../../snippets/payout.ts?shiki';
 import requestPayoutHttp from '../../../../snippets/http/request-payout.sh?shiki';
 
-<ApiLink to="variables/economy-lab.requestPayout" /> starts a seller's cash-out. It reserves some of their earned credits and opens a payout [saga](/economy/concepts/payout-saga/) that a [background worker](/economy/reference/background-worker/) later finishes by paying real USD. It does not pay anyone itself.
+<ApiLink to="variables/economy-lab.requestPayout" /> accepts a seller's request to cash out. It moves eligible earnings into the payout reserve and creates a stored [payout record](/economy/concepts/payout-saga/). A [background worker](/economy/reference/background-worker/) submits the payment later; accepting the request does not mean the payment has settled.
 
 Here a seller asks to cash out 25,000 of their earned credits, clearing the default payout minimum. The amount draws on their own [`earned`](/economy/concepts/accounts-and-double-entry/) balance, in `CREDIT`:
 
@@ -42,20 +42,20 @@ const outcome = await economy.submit(
 
 </CallTabs>
 
-The [`idempotencyKey`](/economy/concepts/idempotency/) makes a retried request run at most once, so a double-tapped cash-out opens one saga, not two.
+Retry a request with the same [`idempotencyKey`](/economy/concepts/idempotency/) and the same payload. Once the request commits, a matching retry returns its original transaction and does not reserve funds again. A business rejection rolls back the claim, so the caller can retry that key after the condition changes.
 
-When a gate declines, the rejection arrives as data, not an exception. Narrow on `detail.reason` to handle this page's own codes:
+A business decline is returned as data. Check `detail.reason` to decide what to show the caller:
 
 ```ts
 if (outcome.status === 'rejected') {
   if (outcome.detail.reason === 'BELOW_MINIMUM') {
-    const { minimum, amount } = outcome.detail; // show the floor next to the ask
+    const { minimum, amount } = outcome.detail; // show the minimum and requested amount
   }
   if (outcome.detail.reason === 'PAYOUT_TOO_SOON') {
-    const retryAt = outcome.detail.retryAt; // the interval gate names the next allowed time
+    const retryAt = outcome.detail.retryAt; // the earliest retry time based on current payout activity
   }
   if (outcome.detail.reason === 'FUNDS_IMMATURE') {
-    const readyAt = outcome.detail.availableAt; // when the earnings clear their hold
+    const readyAt = outcome.detail.availableAt; // when enough unheld earnings would mature
   }
 }
 ```
@@ -68,18 +68,18 @@ The payload fields, beyond the `kind` tag, are:
 | ---------------- | ---------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
 | `idempotencyKey` | `string`                                                   | (required) | A retried submit with the same key runs at most once. See [idempotency](/economy/concepts/idempotency/).          |
 | `actor`          | [`Principal`](/economy/concepts/actors-and-authorization/) | (required) | Who is asking. A `user` may request only their own payout.                   |
-| `userId`         | `string`                                                   | (required) | The seller whose `earned` balance is reserved.                               |
+| `userId`         | `string`                                                   | (required) | The seller whose available earnings will fund the payout. |
 | `amount`         | [`Amount`](/economy/concepts/money-model/)                 | (required) | How much earned credit to set aside. Must be `CREDIT` and strictly positive. |
 
-The `amount` is always paid out later as USD; it never becomes spendable in-app. Only the `earned` account (revenue owed to a seller) is payable, so a payout drawn against `spendable` or `promo` has no meaning here.
+The request uses `CREDIT` from `earned`, not from a wallet's `spendable` or `promo` balance. If the payout settles, the stored quote determines the USD payment. If it fails and is reversed, the reserved credits return to `earned` and start the maturity wait for an untagged funding source (normally `default`) again. This differs from a balance-hold release, which makes its returned credits available immediately.
 
 ## Returns
 
 `requestPayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: a successful request. It carries the reservation transaction.
-- `duplicate`: the same `idempotencyKey` repeated. It returns the earlier result unchanged.
-- `rejected`: a business decline with one of the [reason codes](#reason-codes) below. The decline says the request was too small, too soon, not enough funds, or not yet matured. A `rejected` outcome is returned data, not a thrown exception.
+- `duplicate`: a matching retry of a committed request. It carries the original transaction.
+- `rejected`: a business decline with one of the [reason codes](#reason-codes) below. No payout reservation is committed.
 
 ## Postings
 
@@ -90,9 +90,9 @@ The commit posts one balanced [double-entry](/economy/concepts/accounts-and-doub
 | `earned(userId)`                                                        | debit  | `amount` |
 | [`SYSTEM.PAYOUT_RESERVE`](/economy/concepts/accounts-and-double-entry/) | credit | `amount` |
 
-This moves the credits out of the seller's reach and into `PAYOUT_RESERVE`, which holds credits owed out as a payout. The USD side posts later, when the worker settles the saga. See [the payout saga](/economy/concepts/payout-saga/).
+The credits now belong to the payout workflow. They leave the balance-holds API's `total`; they are not counted in that API's `reserved` bucket. `PAYOUT_RESERVE` and a [balance hold](/economy/concepts/credit-maturity/#balance-holds) are separate accounts with different release rules. The USD entry is posted only when the payout settles.
 
-The same transaction opens a <ApiLink to="interfaces/ports.Saga" /> in state `RESERVED` (see <SourceLink to="src/ports.ts#L1729-L1735 · SAGA_STATES" />). The saga also stores the USD quote itself, alongside the rate's id. The quote is the reserve converted at the request-time [`payout`](/economy/concepts/money-model/) rate, floored. The worker submits exactly that quote to the rail, and settlement posts it unchanged. So the amount can never drift between quoting, paying, and recording. The handler refuses a payout rate above `par` with `CONFIG_INVALID`, at the one place the payout is priced.
+The same transaction creates a <ApiLink to="interfaces/ports.Saga" /> in state `RESERVED` (see <SourceLink to="src/ports.ts#L1729-L1735 · SAGA_STATES" />). It stores the USD quote and rate ID at request time. The quote uses the [`payout`](/economy/concepts/money-model/) rate and rounds down. The worker submits that stored amount, and settlement records it without looking up a new rate. A payout rate above `par` is refused with `CONFIG_INVALID`.
 
 The committed transaction's `meta.sagaId` names the saga it opened, so a caller can follow the payout with `read.saga(sagaId)` instead of scanning `read.payouts()` for its own request.
 
@@ -115,20 +115,22 @@ Each check below returns a `rejected` [`Outcome`](/economy/reference/outcomes-an
 | Code                 | When                                                                                                 |
 | -------------------- | ---------------------------------------------------------------------------------------------------- |
 | `BELOW_MINIMUM`      | The `amount` is under `payoutMinimumEarnedMinor` (default `2_000_000` minor).                        |
-| `PAYOUT_TOO_SOON`    | Less than `payoutMinIntervalMs` (default 24h) since the seller's last request; carries `retryAt`. |
+| `PAYOUT_TOO_SOON`    | Less than `payoutMinIntervalMs` (default 24h) since the most recent update to any of the seller's payout records; carries `retryAt`. |
 | `PAYEE_UNVERIFIED`   | A payee directory is configured and the seller's identity verification isn't `CLEARED`; carries the `userId`. |
-| `INSUFFICIENT_FUNDS` | The seller's `earned` balance is below `amount`.                                                     |
-| `FUNDS_IMMATURE`     | The balance covers `amount`, but the cleared (matured) portion does not. The decline carries `availableAt`. |
+| `INSUFFICIENT_FUNDS` | Unheld `earned` credit, after subtracting pending accrual debt, is below `amount`. |
+| `FUNDS_IMMATURE`     | The unheld balance covers `amount`, but not enough of it has matured. Carries `availableAt`, assuming no further postings or policy changes. |
 | `ECONOMY_PAUSED`     | A `user`'s request lands inside a maintenance window; carries `resumesAt`.                           |
 
 The payee check only exists when the host composes a payee directory in. The economy-edge bridge supplies one backed by the payout rail's hosted identity verification ([the packages](/economy/ports/packages/)). Without a directory, the gate is absent.
 
-The raw `earned` balance can pass `INSUFFICIENT_FUNDS` while part of it is still inside its chargeback window. So a second, stricter check asks whether the [matured](/economy/concepts/credit-maturity/) part alone covers `amount` (see <SourceLink to="src/operations/requestPayout.ts#L74-L104 · requestPayout">source</SourceLink>).
+A balance hold has already moved its amount out of `earned`, so held money cannot fund the payout. Pending earnings can still be present in `earned`; the [maturity check](/economy/concepts/credit-maturity/) makes sure the available portion covers the request (see <SourceLink to="src/operations/requestPayout.ts#L74-L104 · requestPayout">source</SourceLink>).
+
+The cooldown uses the greatest `updatedAt` across the seller's payout records. Processing and settlement updates can therefore move `retryAt` later. The 24-hour default is a configurable policy, not a statement about a legal or payment-provider requirement.
 
 <Callout type="warning">
-  `requestPayout` only counts *matured* earnings. A seller can have plenty of
-  `earned` credit and still get `FUNDS_IMMATURE` if too much of it is still
-  clearing its chargeback window.
+  Enough total earnings does not mean enough available funds. Pending credits
+  must finish their configured wait, and held credits must be released before
+  they can fund a payout.
 </Callout>
 
 A malformed request throws instead:
@@ -151,12 +153,12 @@ The request reserves credit. It never disburses USD. After a `committed` outcome
 ## Caveats
 
 - `requestPayout` never pays. It reserves credits and opens the saga. The worker's `payouts` sweep does the paying, later and off this path.
-- It draws matured earnings only. `FUNDS_IMMATURE` can decline a request the raw `earned` balance covers, and `detail.availableAt` says when the funds clear.
-- `BELOW_MINIMUM` declines under `payoutMinimumEarnedMinor`. `PAYOUT_TOO_SOON` declines within `payoutMinIntervalMs` of the user's last request.
+- It uses matured, unheld earnings only. `detail.availableAt` describes the maturity wait, not when a separate balance hold will be released.
+- `BELOW_MINIMUM` enforces `payoutMinimumEarnedMinor`. `PAYOUT_TOO_SOON` enforces a cooldown after the seller's latest payout-record update.
 - The reserve leaves `PAYOUT_RESERVE` exactly once — settle, reversal, or timeout — whatever races.
 
 ## Try it
 
-Open a real saga — the reserve moves and a card lands in RESERVED on the console's board:
+Run the example to reserve credits and create a payout record in `RESERVED`. The linked console shows its state:
 
 <Runnable name="payout" html={payoutHtml} />

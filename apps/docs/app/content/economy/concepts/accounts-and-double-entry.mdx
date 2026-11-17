@@ -1,7 +1,7 @@
 ---
 title: 'Accounts & double-entry'
-summary: 'Every operation is a balanced double-entry posting across a fixed chart of accounts: spendable, earned, promo, and the system accounts.'
-plain: "A “chart of accounts” is the fixed, named set of buckets money is allowed to sit in. Nothing in the system holds value outside that list — every credit and every dollar lives in one of these named accounts, and moving money means shifting it from one to another."
+summary: 'Every movement has matching debit and credit entries. Account kinds separate wallet credits, seller earnings, holds, and platform funds.'
+plain: 'An account tells you what an amount is for and who it belongs to. A transfer records both where the money came from and where it went, so balances can be rebuilt from the entries.'
 order: 30
 status: stable
 sourceRefs:
@@ -18,32 +18,35 @@ related:
 
 import legsHtml from '../../../snippets/legs.ts?shiki';
 
-Every balance lives in a named account. Every operation is a balanced double-entry <ApiLink to="types/ports.Posting" />. Value moves _between_ accounts as paired debit and credit lines. Those lines always net to zero per currency.
+Every balance belongs to a named account. Each movement is recorded as a <ApiLink to="types/ports.Posting" /> with matching debit and credit lines. The lines must add up to zero within each currency.
 
-You never add to one account without an equal, opposite line somewhere else. A user's accounts hold credits. The platform's own "house" accounts hold its cash, its revenue, and obligations.
+User accounts hold credits. Platform accounts record cash, revenue, and amounts owed. A transfer changes both sides together, in one transaction.
 
 ## Why it exists
 
-Balances are not stored and mutated in place. They are _derived_. The ledger is an append-only book of postings, and an account's balance is the running sum of its lines.
+Ledger entries are the source of truth. Stores also keep current balances for faster reads, but those balances can be recomputed by adding up the entries. Changing a cached balance without matching ledger entries is an inconsistency.
 
-No posting can create or destroy value. Its lines cancel within each currency — the books as a whole always sum to zero. Folding the postings back re-derives the same balance every time.
+A balanced posting accounts for both sides of a transfer. An atomic transaction keeps those sides together: a failed write cannot pay a seller while leaving the buyer's credits untouched.
 
-Without the balanced-posting rule, a single edited or dropped line would mint or burn credits silently. A `topUp` could issue credits no dollars stand behind. A `spend` could pay a seller more than the buyer paid.
-
-The [solvency](/economy/concepts/solvency/) guarantee rests on this rule. The cash set aside on a purchase and the credits issued are two legs of _one_ balanced posting. They cannot drift apart.
+The [solvency check](/economy/concepts/solvency/) adds a separate rule about backing. Balanced entries alone do not prove that an external payment arrived; the host and its payment adapters must record those facts correctly.
 
 ## The chart of accounts
 
-The set of account kinds is fixed. A user has accounts keyed by `AccountKind`: `spendable`, `earned`, and `promo`. The <ApiLink to="functions/economy-lab.spendable">spendable(userId)</ApiLink>, <ApiLink to="functions/economy-lab.earned">earned(userId)</ApiLink>, and <ApiLink to="functions/economy-lab.promo">promo(userId)</ApiLink> helpers build them from a user id. When a [prefunded fast lane](/economy/concepts/instance-economy/) is in play, `sessionEscrow(userId, sessionId)` adds a per-session `escrow` account.
+A user can have five account kinds. The <ApiLink to="functions/economy-lab.spendable">spendable(userId)</ApiLink>, <ApiLink to="functions/economy-lab.earned">earned(userId)</ApiLink>, and <ApiLink to="functions/economy-lab.promo">promo(userId)</ApiLink> helpers name the three main accounts. A [prefunded session](/economy/concepts/instance-economy/) adds an `escrow` account. Each [balance hold](/economy/concepts/credit-maturity/#balance-holds) has its own `reserved` account.
 
 | Account     | Currency | Holds                                                                          |
 | ----------- | -------- | ------------------------------------------------------------------------------ |
-| `spendable` | `CREDIT` | Credits bought and ready to spend: the only always-present user balance backed by trust cash. |
-| `earned`    | `CREDIT` | Revenue owed to the user as a seller, waiting to be paid out.                  |
+| `spendable` | `CREDIT` | Purchased wallet credits. Spending still checks their maturity. Backed by trust cash. |
+| `earned`    | `CREDIT` | Seller earnings that have not moved into a hold or payout. May include pending and available funds. |
 | `promo`     | `CREDIT` | A marketing grant that expires if unspent.                                     |
-| `escrow`    | `CREDIT` | Matured credits parked for one netting session; refunded to `spendable` at settle. Backed, like the spendable they came from. |
+| `escrow`    | `CREDIT` | Matured wallet credits set aside for a session. Unused credits return to `spendable`; trust backing still applies. |
+| `reserved` | `CREDIT` | Matured seller earnings in a balance hold. A release returns them to `earned`. |
 
-The platform's house accounts are the fixed <ApiLink to="variables/economy-lab.SYSTEM" /> map, each id prefixed `platform:`. They hold three things: the platform's cash, its revenue, and the offsetting (contra) entries that keep a one-sided user move balanced.
+A balance hold is a transfer from `earned` to an account such as `usr_s1:hold:delivery_1:reserved`. Its remaining amount is that account's ledger balance. Use the holds API to place and release it, so the opening conditions and retry checks are recorded together.
+
+The balance API's `reserved` amount counts these holds only. It does not count `PAYOUT_RESERVE`, which belongs to a payout that has already been accepted.
+
+The platform's house accounts are the fixed <ApiLink to="variables/economy-lab.SYSTEM" /> map, each ID prefixed `platform:`. They record cash, revenue, clearing amounts, and the matching entries for user balances.
 
 | `SYSTEM` account | Currency | Holds                                                                              |
 | ---------------- | -------- | ---------------------------------------------------------------------------------- |
@@ -67,7 +70,7 @@ Currency is a property of the account, not the posting. Everything is `CREDIT` e
 
 ## Debit-normal and credit-normal
 
-Different accounts grow on opposite sides. The ledger has to know which side, so a balance reads right-way-up. A user's `spendable` rises when you _credit_ it, because the platform owes them more. `TRUST_CASH` rises when you _debit_ it, because more cash is in.
+A debit does not always mean a smaller balance. The account kind decides which side increases it. Crediting a user's `spendable` account increases the credits owed to that user. Debiting `TRUST_CASH` increases the cash recorded there.
 
 `isDebitNormal` records the side per account. The `USD` accounts, `STORED_VALUE`, `RECEIVABLE`, `PROMO_FLOAT`, and `OPENING_EQUITY` grow on a debit; the rest grow on a credit.
 
@@ -83,7 +86,7 @@ Both rules are visible on any committed transaction. The legs net to zero, and `
 A posting is also classified for solvency. `classify` sorts each account into one of four buckets:
 
 - `custodial`: users' `spendable` and per-session `escrow`. These are the only credits that count toward the trust backing total, and the backing follows the money into escrow and back out.
-- `excluded`: `earned`, `promo`, and `PAYOUT_RESERVE`, obligations owed in credits, not dollars.
+- `excluded`: `earned`, `promo`, balance-hold `reserved` accounts, and `PAYOUT_RESERVE`. These do not increase the custodial backing total.
 - `house-asset`: value the platform holds or is owed.
 - `house-liability`: value the platform owes out.
 
@@ -104,7 +107,7 @@ Two rules guard every write. A posting is rejected unless its leg amounts sum to
 
 It drops zero-amount legs first — a share that rounds to zero is a no-op the row-level schema would reject.
 
-These app-side checks aren't the real enforcer. They're a courtesy that hands you a clear fault first: `LEDGER_UNBALANCED`, `OVERDRAFT`. The balance and no-overdraft invariants live in the database itself: Postgres constraint triggers and MySQL stored procedures. So a row written around the app is still refused.
+The application checks return a clear error before writing. SQL stores also enforce the rules at their storage boundary: PostgreSQL uses constraint triggers, while MySQL uses posting routines and restricts direct writes by the application role. See the [storage contract](/economy/ports/storage/) for adapter requirements.
 
 The [prover](/economy/concepts/integrity/) goes further still, re-checking conservation and overdraft after every committed operation.
 

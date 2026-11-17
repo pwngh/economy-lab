@@ -27,9 +27,9 @@ import type { Saga, Unit } from '#src/ports.ts';
  * Undoes an in-flight payout. This is the manual version of the worker's give-up undo, and the
  * operation a verified payout-failed webhook applies. The move to FAILED (so the worker never
  * pays it) and the undo posting (reserve back to the seller's earned account) commit together:
- * the credits return
- * only if the saga also stops. This is why it does not use the generic `reverse`, which leaves
- * saga state alone, so a reversed-but-still-RESERVED saga would be paid out anyway.
+ * the credits return only if the saga also stops. They wait again as an untagged source (normally
+ * the default period). The generic `reverse` cannot be used here: it leaves saga state alone,
+ * so a reversed-but-still-RESERVED saga could still be paid out.
  *
  * RESERVED, or SUBMITTED aged past `config.maxPayoutAgeMs`, moves to FAILED and posts the undo.
  * SETTLED and still-live SUBMITTED both throw `INVALID_TRANSITION`: returning a reserve already

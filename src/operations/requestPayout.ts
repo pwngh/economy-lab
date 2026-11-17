@@ -50,9 +50,9 @@ export async function requestPayout(
       amount,
     });
   }
-  // This enforces the minimum gap between a user's payout requests. `lastPayoutAt` is the max
-  // `updatedAt` over their sagas. The comparison is strict `<`, so a request exactly the interval
-  // later passes. It rejects rather than throws — the caller can surface `retryAt`.
+  // The cooldown starts at the latest `updatedAt` across the user's sagas, in any state.
+  // Processing updates can move `retryAt` later. A request at exactly that timestamp passes.
+  // An earlier request is rejected rather than thrown, so the caller can show `retryAt`.
   const last = await unit.sagas.lastPayoutAt(operation.userId);
   if (
     last !== null &&

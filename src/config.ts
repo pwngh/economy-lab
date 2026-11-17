@@ -115,8 +115,8 @@ export interface Config {
   payoutMinimumEarnedMinor: bigint;
 
   /**
-   * Min time (ms) between payout requests. The default is 24h to match the live docs. A
-   * deployment bound by the 14-day legal requirement must set 1_209_600_000.
+   * Minimum wait (ms) since the user's latest payout saga update, in any state. Processing a
+   * payout can restart this wait. The default is 24 hours; zero disables the cooldown.
    */
   payoutMinIntervalMs: number;
 
@@ -476,8 +476,8 @@ export function missingPolicyAnchors(
 }
 
 function buildConfig(env: EnvMap): Config {
-  // Outside production unset horizons are 0, so the zero-config quickstart's topUp → spend
-  // works. Production must state the card horizon, the anchor every other rail defaults to.
+  // Outside production the card wait defaults to 0. Other unset waits inherit the card value.
+  // Production must state the card wait explicitly; the zero-config quickstart can spend at once.
   const horizon = boundsOf('maturityHorizonMs');
   const sla = boundsOf('payoutSla');
   const cardHorizonMs = readInt(env.MATURITY_HORIZON_CARD_MS, 0, horizon);

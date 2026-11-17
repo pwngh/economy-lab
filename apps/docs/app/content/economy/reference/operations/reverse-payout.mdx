@@ -95,7 +95,7 @@ The operation names no account directly. The seller's `earned` account and the
 `reversePayout` resolves to an [`Outcome`](/economy/reference/outcomes-and-reason-codes/).
 
 - `committed`: the saga moved to `FAILED` and the undo posting committed.
-- `duplicate`: there was nothing left to undo (see preconditions below); no posting was made.
+- `duplicate`: this call posted no undo. The payout may already be handled, or another update may have won the race. Read the current payout state before assuming the funds were returned.
 
 `reversePayout` returns no `rejected` outcome. A malformed request throws instead. See
 [reason codes](#reason-codes).
@@ -116,6 +116,12 @@ Both legs are in `CREDIT` and sum to zero, so the books stay
 
 The `FAILED` state change and this posting commit in the same transaction, so the credits return only
 if the saga also stops.
+
+Returned payout credits start the [maturity wait](/economy/concepts/credit-maturity/) for an
+untagged funding source (normally `default`) again, from the return posting's timestamp. The same rule applies when the worker gives up on a
+payout. With a nonzero wait, these credits are pending before they become available again. A
+[balance-hold release](/economy/concepts/credit-maturity/#balance-holds) behaves differently: it
+returns already-matured earnings without another wait.
 
 ## Authorization
 

@@ -94,13 +94,13 @@ function Acct({
   );
 }
 
-/** The fixed chart of accounts, with `spendable` backed one-for-one by `TRUST_CASH`; mirrors `src/accounts.ts`. */
+/** The chart of accounts, with custodial credits backed at the configured par rate; mirrors `src/accounts.ts`. */
 export function ChartOfAccounts() {
   return (
     <Diagram
-      viewBox="0 0 760 306"
-      label="The chart of accounts. A user holds four CREDIT accounts: spendable (backed by trust cash), earned, promo, and per-session escrow (also backed, since escrow is custodial). The platform holds eleven house accounts: the USD accounts trust_cash, usd_clearing, and revenue_usd; and the CREDIT accounts stored_value, promo_float, receivable, revenue, payout_reserve, opening_equity, settlement_accrual, and netting_clearing. A user's spendable balance is backed one-for-one by trust_cash."
-      caption="The fixed chart of accounts. A user's spendable credits — and the per-session escrow a prefunded fast lane parks them in — are backed one-for-one by USD in trust_cash; every other account is the platform's own cash, revenue, or a contra entry. settlement_accrual holds sellers' parked shares between charge and drain; netting_clearing is the pass-through a session's net settles across."
+      viewBox="0 0 760 362"
+      label="The chart of accounts. Users have five CREDIT account kinds: spendable, earned, promo, escrow, and reserved. Spendable and per-session escrow count toward trust backing. Each balance hold has a reserved account for held seller earnings. The platform has eleven house accounts: three in USD and eight in CREDIT. PAYOUT_RESERVE is separate from user balance holds."
+      caption="Spendable credits and session escrow count toward trust backing. Earned credits are owed to sellers; reserved credits are earnings set aside in balance holds. PAYOUT_RESERVE holds credits for accepted payouts. Platform accounts record the matching cash, revenue, and obligations."
     >
       <ArrowDefs />
 
@@ -111,6 +111,7 @@ export function ChartOfAccounts() {
       <Acct x={40} y={96} w={190} name="earned" note="CREDIT, owed to seller" />
       <Acct x={40} y={152} w={190} name="promo" note="CREDIT, expires if unspent" />
       <Acct x={40} y={208} w={190} name="escrow" note="CREDIT, per session, backed" />
+      <Acct x={40} y={264} w={190} name="reserved" note="CREDIT, held earnings" />
 
       <text className="d-head" x={527} y={22} textAnchor="middle">
         PLATFORM (HOUSE) ACCOUNTS
@@ -133,15 +134,15 @@ export function ChartOfAccounts() {
         backed
       </text>
       <text className="d-elabel" x={273} y={78} textAnchor="middle">
-        one-for-one
+        at par rate
       </text>
 
-      <rect className="d-box usd" x={40} y={270} width={16} height={12} rx={2} />
-      <text className="d-sub" x={62} y={280}>
+      <rect className="d-box usd" x={40} y={326} width={16} height={12} rx={2} />
+      <text className="d-sub" x={62} y={336}>
         USD account
       </text>
-      <rect className="d-box" x={170} y={270} width={16} height={12} rx={2} />
-      <text className="d-sub" x={192} y={280}>
+      <rect className="d-box" x={170} y={326} width={16} height={12} rx={2} />
+      <text className="d-sub" x={192} y={336}>
         CREDIT account
       </text>
     </Diagram>
@@ -189,24 +190,24 @@ function State({
 export function PayoutSaga() {
   return (
     <Diagram
-      viewBox="0 0 760 250"
-      label="The payout saga state machine. A live payout starts RESERVED. The payouts sweep submits the saga's stored USD quote to the rail and advances it to SUBMITTED. The provider's settlement webhook advances SUBMITTED to SETTLED, a terminal state. From RESERVED or SUBMITTED a timeout, exhausted attempts, or an operator reversal force-fail the saga to FAILED, returning the reserve to the seller's earned account. SagaState also declares REQUESTED, but a live payout opens already RESERVED."
-      caption="The payout saga. Each transition is a compare-and-set, and the transitions that move money post it in the same transaction, so a re-driven step pays at most once. SETTLED and FAILED are terminal; the reserve is released exactly once."
+      viewBox="0 0 760 290"
+      label="A payout starts RESERVED. The worker commits SUBMITTED before calling the provider. A settlement webhook advances it to SETTLED. A reversal can move RESERVED to FAILED. Provider failure, an eligible reversal, or the timeout policy can move SUBMITTED to FAILED. FAILED returns the credits to earned. Reaching the attempt limit stops hand-off retries; an unknown outcome still waits for the timeout policy. REQUESTED exists in the enum but is not the opening state."
+      caption="The worker records SUBMITTED before calling the provider. The attempt limit stops retries without declaring an unknown payment failed. Settlement, a permitted reversal, or the timeout policy determines what happens to the reserve. SETTLED and FAILED are terminal."
     >
       <ArrowDefs />
 
       <State x={70} y={48} name="RESERVED" sub="reserve held" />
-      <State x={314} y={48} name="SUBMITTED" sub="sent to rail" />
+      <State x={314} y={48} name="SUBMITTED" sub="outcome pending" />
       <State x={558} y={48} name="SETTLED" sub="terminal" variant="ok" />
-      <State x={314} y={158} name="FAILED" sub="terminal" variant="bad" />
+      <State x={314} y={190} name="FAILED" sub="credits returned" variant="bad" />
 
       {/* forward path */}
       <line className="d-edge" x1={202} y1={70} x2={310} y2={70} markerEnd="url(#dgm-arrow)" />
       <text className="d-elabel" x={256} y={56} textAnchor="middle">
-        payouts sweep
+        worker commits
       </text>
       <text className="d-elabel" x={256} y={92} textAnchor="middle">
-        submits USD quote
+        then calls provider
       </text>
 
       <line className="d-edge" x1={446} y1={70} x2={554} y2={70} markerEnd="url(#dgm-arrow)" />
@@ -217,22 +218,23 @@ export function PayoutSaga() {
         webhook
       </text>
 
-      {/* force-fail branch */}
-      <path
-        className="d-edge bad"
-        d="M136,92 C136,150 250,150 310,168"
-        fill="none"
-        markerEnd="url(#dgm-arrow)"
-      />
-      <line className="d-edge bad" x1={380} y1={92} x2={380} y2={154} markerEnd="url(#dgm-arrow)" />
-      <text className="d-elabel" x={470} y={150} textAnchor="start">
-        timeout, max attempts, reverse
+      {/* Failure exits depend on whether submission has started. */}
+      <path className="d-edge bad" d="M136,92 V212 H310" fill="none" markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={156} y={160} textAnchor="start">
+        operator reversal
       </text>
-      <text className="d-elabel" x={470} y={166} textAnchor="start">
-        → reserve returns to earned
+      <line className="d-edge bad" x1={380} y1={92} x2={380} y2={186} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={400} y={135} textAnchor="start">
+        provider failure,
+      </text>
+      <text className="d-elabel" x={400} y={151} textAnchor="start">
+        eligible reversal,
+      </text>
+      <text className="d-elabel" x={400} y={167} textAnchor="start">
+        or timeout
       </text>
 
-      <text className="d-note" x={70} y={232}>
+      <text className="d-note" x={70} y={264}>
         SagaState also declares REQUESTED; a live payout opens already RESERVED, in the same
         transaction as the reservation.
       </text>
@@ -652,22 +654,22 @@ export function WorkerSweeps() {
   );
 }
 
-/** Credit maturity, dated lots draining oldest-first with the matured tail a cash-out may draw; mirrors `src/maturity.ts`. */
+/** A spendable wallet with one shared maturity wait; earned-account replay follows different allocation rules. */
 export function CreditMaturity() {
   const xs = [30, 124, 218, 312, 406, 500, 594];
   const w = 84;
-  const matLine = 495; // between the matured tail and the still-clearing tail
+  const matLine = 495; // between matured lots and lots that are still waiting
   return (
     <Diagram
       viewBox="0 0 760 262"
-      label="Credit maturity. An account's funds are dated lots, oldest on the left. Past spends drained the two oldest lots, because spends draw oldest-first. The five newest lots are the live balance, the FIFO tail. A maturity horizon falls inside that tail: the three lots older than the horizon have matured; the two newest are still in their settlement wait. The matured balance is the cleared part of the tail."
-      caption="Spends drain oldest-first, so the live balance is the newest run of lots. The matured part is only the lots within that run that have passed their maturity horizon (now minus the settlement wait) — the tail read sums them newest-first and stops once it covers the balance."
+      label="Maturity in a spendable wallet whose lots share one wait. Lots are oldest on the left. Past spends used the two oldest lots, leaving the five newest as the current balance. Three remaining lots have matured and two are still waiting. The three matured lots are eligible to spend. Seller earnings use a separate ledger replay, described below."
+      caption="Wallet spending uses the oldest credits first. In this example, all lots share one waiting period: three remaining lots have matured and two are still waiting. Earned-account reads also account for payouts and holds that must leave pending lots untouched."
     >
       <ArrowDefs />
 
       {/* tail bracket over the five newest lots */}
       <text className="d-elabel" x={(xs[2] + xs[6] + w) / 2} y={42} textAnchor="middle">
-        live balance — newest lots, the FIFO tail
+        live spendable balance — newest lots
       </text>
       <path
         className="d-edge"
@@ -697,14 +699,14 @@ export function CreditMaturity() {
         fill="none"
       />
       <text className="d-name" x={(xs[2] + xs[4] + w) / 2} y={196} textAnchor="middle">
-        matured — spendable and payable
+        matured — eligible to spend
       </text>
 
       <text className="d-sub" x={xs[0]} y={196} textAnchor="start">
         spent (drained first)
       </text>
       <text className="d-sub" x={xs[5] + 8} y={196} textAnchor="start">
-        still clearing
+        still waiting
       </text>
 
       {/* time axis */}

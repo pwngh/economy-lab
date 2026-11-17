@@ -40,7 +40,7 @@ export type RejectionCode =
   | 'ALREADY_SUBSCRIBED'
   // The payout is below the configured minimum (payoutMinimumEarnedMinor).
   | 'BELOW_MINIMUM'
-  // A payout was requested before enough time had passed since the user's previous request
+  // A payout was requested before enough time had passed since the user's latest payout update
   // (minimum gap is config payoutMinIntervalMs). The decline carries when the user may retry.
   | 'PAYOUT_TOO_SOON'
   | 'PAYEE_UNVERIFIED'

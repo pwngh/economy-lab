@@ -44,10 +44,10 @@ export type MaturedAtLeastOptions = MaturityOptions & {
 const DEFAULT_SOURCE: string = 'default';
 
 /**
- * Returns the wait in milliseconds before credits from a funding source can be cashed out. The wait
- * covers the window in which the payment could still be reversed, such as a card chargeback. A
- * source not in the config falls back to the 'default' horizon, so an unknown or misspelled source
- * is treated cautiously rather than as instantly available.
+ * Returns the configured wait in milliseconds before credits from a funding source can be used.
+ * Passing this wait does not prove settlement or rule out a later reversal. A source absent from
+ * the config uses the 'default' horizon, then 'card', then zero if both are unset. Configuration
+ * builders supply defaults; validation alone does not fill in missing source waits.
  */
 export function maturityHorizonMs(source: string, config: Config): number {
   const horizons = config.maturityHorizonMs;
