@@ -13,7 +13,7 @@
 // anchors can't drift out from under the links. Bump REPO_REF when re-pointing the docs at a newer
 // snapshot, then re-anchor the chips; app/anchors.test.ts fails while they disagree.
 export const REPO_URL = 'https://github.com/pwngh/economy-lab';
-export const REPO_REF = '22f1a1a7d7c45e09d6ae141379eef661a2ebcdb2';
+export const REPO_REF = '3bbbd6612cba222a07771a6bfa86407a8870b577';
 
 /**
  * Turn a `sourceRefs` chip (`path · symbol`) into a GitHub blob URL at the pinned ref. An optional
