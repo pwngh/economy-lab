@@ -509,6 +509,7 @@ async function runServiceUnderEnv(
     // so a host driving it in-process keeps whatever is left: a live watcher holds the host's
     // event loop open and can still fire, building a second app against the service just closed,
     // and a signal handler per call accumulates until node warns about listeners.
+    if (parked) clearInterval(parked);
     reload?.close();
     for (const signal of ['SIGINT', 'SIGTERM'] as const)
       process.off(signal, shutdown);

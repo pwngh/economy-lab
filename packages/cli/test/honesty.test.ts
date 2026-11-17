@@ -11,11 +11,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runEconomy } from '../src/index.js';
-import { PKG, runSync, withoutSelectedBackends } from './support/process.js';
+import {
+  PKG,
+  TSX,
+  childEnv,
+  runSync,
+  withoutSelectedBackends,
+} from './support/process.js';
 
 // A postgres nothing is listening on: preflight refuses on the name before a driver loads, so
 // this never opens a socket.
@@ -215,6 +222,33 @@ test('a numeric flag admits what the environment admits, and names the rule when
       `--port ${value} was refused:\n${parsed.stderr}`,
     );
   }
+});
+
+test('a worker whose banner sink throws releases its parked timer', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'economy-worker-sink-'));
+  writeFileSync(
+    join(dir, 'economy.app.ts'),
+    'export const authenticate = false;\n',
+  );
+  const cli = new URL('../src/index.ts', import.meta.url).href;
+  // No process.exit: a forgotten interval must keep the child alive and hit the bound.
+  const source = `import { runEconomy } from ${JSON.stringify(cli)};
+process.exitCode = await runEconomy(['worker'], {
+  stdout: { write() { throw new Error('banner sink failed'); } },
+});`;
+  const run = spawnSync(
+    process.execPath,
+    ['--import', TSX, '--input-type=module', '-e', source],
+    { cwd: dir, encoding: 'utf8', env: childEnv(), timeout: 10_000 },
+  );
+  assert.match(run.stderr, /banner sink failed/);
+  assert.equal(
+    run.error,
+    undefined,
+    'worker stayed alive after its sink threw',
+  );
+  assert.equal(run.signal, null);
+  assert.equal(run.status, 1);
 });
 
 test('the dev banner is printed only once shutdown can handle a signal', async () => {
