@@ -172,6 +172,7 @@ test('no test in this package hands a child the machine environment', () => {
     .map(([name]) => name);
   assert.deepEqual(spawns, [
     'dev-serve.test.ts', // spawns node itself: the built entry under --watch, and the strip-types flag
+    'honesty.test.ts', // proves a worker exits naturally after its output sink throws
     'support/process.ts', // the helper every spawn of a verb goes through
   ]);
 
