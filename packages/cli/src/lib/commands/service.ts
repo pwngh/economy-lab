@@ -15,6 +15,7 @@ import { resolve, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseEnv } from 'node:util';
 import { spawn, spawnSync } from 'node:child_process';
+import { setImmediate } from 'node:timers';
 import { createApp, type App } from '@pwngh/economy-core';
 import { devTokens } from '@pwngh/economy-auth';
 import {
@@ -511,7 +512,13 @@ async function runServiceUnderEnv(
     // and a signal handler per call accumulates until node warns about listeners.
     if (parked) clearInterval(parked);
     reload?.close();
-    for (const signal of ['SIGINT', 'SIGTERM'] as const)
-      process.off(signal, shutdown);
+    const removeHandlers = () => {
+      for (const signal of ['SIGINT', 'SIGTERM'] as const)
+        process.off(signal, shutdown);
+    };
+    // Keep absorbing a late relay until the bin's promise continuation exits. An embedding
+    // host releases the handlers next turn; a boot error needs no signal-drain grace period.
+    if (closing) setImmediate(removeHandlers);
+    else removeHandlers();
   }
 }

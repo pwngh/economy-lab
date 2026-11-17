@@ -269,6 +269,7 @@ const SYNC_CALL_SITES = [
   'packages/cli/test/dev-serve.test.ts',
   'packages/cli/test/dev-serve.test.ts',
   'packages/cli/test/honesty.test.ts',
+  'packages/cli/test/honesty.test.ts',
   // Twice: the verb run through the shipped entry, and the verb run with both streams injected.
   'packages/cli/test/support/process.ts',
   'packages/cli/test/support/process.ts',
@@ -352,7 +353,7 @@ test('no bound inside a test outlives the file bound that cancels the file first
     }
   }
   assert.deepEqual(unresolved, UNRESOLVED_BOUNDS);
-  assert.equal(examined, 42, `examined ${examined} declared bounds`);
+  assert.equal(examined, 43, `examined ${examined} declared bounds`);
   assert.equal(resolved, examined - unresolved.length);
 });
 
