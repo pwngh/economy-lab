@@ -88,7 +88,7 @@ Continue to request payouts through `economy.submit(requestPayout(...))`. Holds 
 
 `npm run demo:balances` is the complete feature check: it fails if database coverage is missing. Once dependencies and packages are built, `npm run test:balances` uses configured stores instead. That shorter command reports unavailable SQL stores as skips unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
 
-A recorded feature run passed 44 tests with no skips across four adapters. Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 26 seconds, excluding installation and builds.
+A recorded feature run passed 52 tests with no skips across four adapters. Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 29 seconds, excluding installation and builds.
 
 These checks exercise a reproducible sample of operation sequences. They are evidence of correctness for those cases, not a throughput benchmark or a proof of every possible sequence.
 
