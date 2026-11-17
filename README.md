@@ -56,9 +56,22 @@ This is a trusted in-process API: the host authorizes callers, verifies events, 
 
 `npm run demo:balances` is the complete, strict feature test command. Missing database coverage fails it. After dependencies and packages are built, `npm run test:balances` runs against configured stores; unavailable SQL stores are explicitly skipped unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
 
-The observed feature run passed 44 tests with zero skips across four adapters. Each adapter ran 32 seeded programs and 624 generated steps: 128 programs and 2,496 steps in total. There were 48 payout races, including 24 pairs proven to overlap inside PostgreSQL/MySQL transactions; exactly one payout committed in each pair. The test phase took about 39 seconds in the local Docker run, excluding dependency installation and builds. These are correctness measurements, not a throughput benchmark or proof over all possible programs.
+The observed feature run passed 44 tests with zero skips across four adapters. Each adapter ran 32 seeded programs and 624 generated steps: 128 programs and 2,496 steps in total. There were 48 payout races, including 24 pairs proven to overlap inside PostgreSQL/MySQL transactions; exactly one payout committed in each pair. The clean-checkout test phase took about 54 seconds in the local Docker run, excluding dependency installation and builds. These are correctness measurements, not a throughput benchmark or proof over all possible programs.
 
 The wider repository gate is `npm run check`; it additionally needs generated API documentation, application dependencies, and other local services. See [test/README.md](test/README.md) for the repository test conventions.
+
+## Existing ledger workflows
+
+The rest of Economy Lab remains available: wallets, marketplace sales, refunds, subscriptions, payout processing, and integrity checks. The existing local service and worker use the module at [economy/app.ts](economy/app.ts).
+
+```sh
+npm run dev          # existing local development service
+npm test             # root test suite; unavailable backends report skips
+npm run prove        # randomized ledger invariant checks
+npm run fuzz         # compare storage implementations
+```
+
+The [Economy API](https://economy-lab-docs.pages.dev/economy/reference/the-economy/), [ledger accounts](https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/), [worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/), and [package guide](https://economy-lab-docs.pages.dev/economy/ports/packages/) cover those workflows. The existing [documentation app](apps/docs) and [console](apps/console) retain their own sources and setup; this feature adds no endpoints or screens.
 
 ## Limits
 

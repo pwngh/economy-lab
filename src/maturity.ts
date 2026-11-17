@@ -399,16 +399,6 @@ export async function maturedBalanceFullScan(
     return zero(unit);
   }
 
-  if (walletKindOf(account) === 'earned') {
-    const tail = [];
-    for await (const slice of earnedSlices(ledger, account, live.minor, {
-      now,
-      config: options.config,
-    })) {
-      tail.push({ minor: slice.take, maturesAt: slice.maturesAt });
-    }
-    return sumMatured(tail, now, unit);
-  }
   const lots = await collectLots(ledger, account, options.config);
   const tail = fifoTail(lots, live.minor);
   return sumMatured(tail, now, unit);
