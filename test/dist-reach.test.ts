@@ -294,6 +294,7 @@ const REACHING = [
   'test/adapters/wire-trial.test.ts',
   'test/bench-harness.test.ts',
   'test/conformance-contract.test.ts',
+  'test/conformance/balance-holds.test.ts',
   'test/conformance/claim-contention.race.test.ts',
   'test/conformance/claim-lock-lifetime.race.test.ts',
   'test/conformance/concurrency.adversarial.test.ts',
@@ -326,7 +327,7 @@ test('a root test file imports the guard exactly when it reads an emit', () => {
     [...ALL_TEST_FILES].sort(),
     'walking test/ and reading the table give different root test files',
   );
-  assert.equal(files.length, 187, `walked ${files.length} root test files`);
+  assert.equal(files.length, 188, `walked ${files.length} root test files`);
 
   const reaching = new Set(reachesDist(ROOT, files).map((each) => each.file));
   assert.deepEqual(
@@ -362,7 +363,7 @@ test('a root test file imports the guard exactly when it reads an emit', () => {
   }
   // Exact, because three counts that only have to sum are satisfied by every file landing in the
   // one bucket the loop can never fail.
-  assert.deepEqual([guarded, exempt, plain], [45, 0, 142]);
+  assert.deepEqual([guarded, exempt, plain], [46, 0, 142]);
   assert.equal(guarded + exempt, reaching.size);
   assert.equal(reaching.size, REACHING.length);
   assert.equal(guarded + exempt + plain, files.length);

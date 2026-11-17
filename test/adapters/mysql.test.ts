@@ -255,7 +255,7 @@ describeEngine('mysql', 'mysql(url): the one-call open', (rig) => {
       try {
         await admin.query(`CREATE DATABASE \`${probe}\``);
         const probeUrl = at.replace(/\/[^/?]+(\?|$)/, `/${probe}$1`);
-        await assert.rejects(mysql(probeUrl), /schema version 18/);
+        await assert.rejects(mysql(probeUrl), /schema version 19/);
       } finally {
         await admin.query(`DROP DATABASE IF EXISTS \`${probe}\``);
         await admin.end();

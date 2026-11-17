@@ -191,7 +191,7 @@ test('every test script in the tree carries the file bound', () => {
   assert.equal(found.length, 21, `read ${found.length} package manifests`);
   assert.equal(
     invocations.length,
-    21,
+    22,
     `examined ${invocations.length} node --test invocations in package scripts`,
   );
 });
@@ -268,6 +268,7 @@ const SYNC_CALL_SITES = [
   // Twice: the strip-types recovery run, and the taken-port refusal under a Deno stand-in.
   'packages/cli/test/dev-serve.test.ts',
   'packages/cli/test/dev-serve.test.ts',
+  'packages/cli/test/honesty.test.ts',
   // Twice: the verb run through the shipped entry, and the verb run with both streams injected.
   'packages/cli/test/support/process.ts',
   'packages/cli/test/support/process.ts',
@@ -351,7 +352,7 @@ test('no bound inside a test outlives the file bound that cancels the file first
     }
   }
   assert.deepEqual(unresolved, UNRESOLVED_BOUNDS);
-  assert.equal(examined, 39, `examined ${examined} declared bounds`);
+  assert.equal(examined, 42, `examined ${examined} declared bounds`);
   assert.equal(resolved, examined - unresolved.length);
 });
 

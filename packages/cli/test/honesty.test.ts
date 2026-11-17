@@ -11,11 +11,18 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runEconomy } from '../src/index.js';
-import { PKG, runSync, withoutSelectedBackends } from './support/process.js';
+import {
+  PKG,
+  TSX,
+  childEnv,
+  runSync,
+  withoutSelectedBackends,
+} from './support/process.js';
 
 // A postgres nothing is listening on: preflight refuses on the name before a driver loads, so
 // this never opens a socket.
@@ -214,6 +221,63 @@ test('a numeric flag admits what the environment admits, and names the rule when
       !parsed.stderr.includes('takes a whole number'),
       `--port ${value} was refused:\n${parsed.stderr}`,
     );
+  }
+});
+
+test('a worker whose banner sink throws releases its parked timer', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'economy-worker-sink-'));
+  writeFileSync(
+    join(dir, 'economy.app.ts'),
+    'export const authenticate = false;\n',
+  );
+  const cli = new URL('../src/index.ts', import.meta.url).href;
+  // No process.exit: a forgotten interval must keep the child alive and hit the bound.
+  const source = `import { runEconomy } from ${JSON.stringify(cli)};
+process.exitCode = await runEconomy(['worker'], {
+  stdout: { write() { throw new Error('banner sink failed'); } },
+});`;
+  const run = spawnSync(
+    process.execPath,
+    ['--import', TSX, '--input-type=module', '-e', source],
+    { cwd: dir, encoding: 'utf8', env: childEnv(), timeout: 10_000 },
+  );
+  assert.match(run.stderr, /banner sink failed/);
+  assert.equal(
+    run.error,
+    undefined,
+    'worker stayed alive after its sink threw',
+  );
+  assert.equal(run.signal, null);
+  assert.equal(run.status, 1);
+});
+
+test('the dev banner is printed only once shutdown can handle a signal', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'economy-ready-signal-'));
+  const cwd = process.cwd();
+  let handled = false;
+  const out = {
+    write: (text: string) => {
+      if (text.startsWith('economy dev — ')) {
+        handled = process.emit('SIGTERM');
+        // Before the fix the banner preceded the handler. Drain on the next turn so that
+        // regression fails the assertion instead of leaving the server running.
+        if (!handled) setImmediate(() => process.emit('SIGTERM'));
+      }
+      return true;
+    },
+  };
+  process.chdir(dir);
+  try {
+    await withoutSelectedBackends(async () => {
+      const code = await runEconomy(['dev', '--port', '0'], {
+        stdout: out,
+        stderr: { write: () => true },
+      });
+      assert.equal(code, 0);
+      assert.equal(handled, true, 'the banner preceded the shutdown handler');
+    });
+  } finally {
+    process.chdir(cwd);
   }
 });
 

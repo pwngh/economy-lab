@@ -154,9 +154,9 @@ test('the file steps partition every test file, and nothing else defines that se
   // Exact, because a roster that quietly empties still satisfies a partition.
   assert.deepEqual(
     rosters.map((roster) => roster.length),
-    [168, 6, 5, 2, 1, 1, 1, 1, 1, 1],
+    [168, 6, 6, 2, 1, 1, 1, 1, 1, 1],
   );
-  assert.equal(ALL_TEST_FILES.length, 187);
+  assert.equal(ALL_TEST_FILES.length, 188);
 });
 
 test('every test file the table runs still exists', () => {
@@ -200,7 +200,7 @@ test('lint and format govern every authored source file', async () => {
   assert.deepEqual(await governed('dist/src/index.js'), ['eslint', 'prettier']);
 
   const src = authored('src');
-  assert.equal(src.length, 105, 'src/ file count moved; re-derive and re-pin');
+  assert.equal(src.length, 106, 'src/ file count moved; re-derive and re-pin');
 
   const files = [...src, ...ALL_TEST_FILES];
   const exempt: Record<string, string[]> = {};
@@ -211,7 +211,7 @@ test('lint and format govern every authored source file', async () => {
   assert.deepEqual(exempt, {});
 
   // The test half is the pinned roster above, resolved here rather than counted twice.
-  assert.equal(files.length, 105 + ALL_TEST_FILES.length);
+  assert.equal(files.length, 106 + ALL_TEST_FILES.length);
 });
 
 interface Workflow {
