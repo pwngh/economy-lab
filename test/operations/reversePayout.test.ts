@@ -26,12 +26,22 @@ import { advanceDuePayouts } from '#src/worker/payouts.ts';
 import { ERROR_CODES, fault } from '#src/errors.ts';
 import { makeEconomy } from '#test/support/economy.ts';
 import { memoryStore } from '#src/adapters/memory.ts';
-import { credit as creditLeg, debit as debitLeg } from '#src/ledger.ts';
+import { createBalanceHolds } from '#src/balance-holds.ts';
+import { createEconomy } from '#src/economy.ts';
+import {
+  credit as creditLeg,
+  debit as debitLeg,
+  lockAll,
+  postEntry,
+} from '#src/ledger.ts';
 import { earned, SYSTEM } from '#src/accounts.ts';
 
 import type { AccountRef } from '#src/accounts.ts';
 import { credit, sagaAnchor, usd } from '#test/support/builders.ts';
-import { reversePayout as makeReversePayout } from '#src/operation.ts';
+import {
+  requestPayout,
+  reversePayout as makeReversePayout,
+} from '#src/operation.ts';
 import {
   fixedClock,
   sequentialIds,
@@ -42,6 +52,7 @@ import {
   silentMeter,
   fakeProcessor,
   defaultPricing,
+  makePorts,
   makeWorkerCtx,
   testConfig,
 } from '#test/support/capabilities.ts';
@@ -282,6 +293,127 @@ describe('reversePayout', () => {
     assert.deepEqual(afterSecond, afterFirst);
     assert.deepEqual(afterSecond, credit('20000.00'));
   });
+});
+
+describe('returned payout availability', () => {
+  for (const path of ['manual reversal', 'worker dead-letter'] as const) {
+    test(`${path} starts a new default maturity wait`, async (t) => {
+      const clock = fixedClock(0);
+      const digest = seededDigest(1);
+      const ids = sequentialIds();
+      const config = {
+        ...testConfig(),
+        maturityHorizonMs: { card: 10, default: 100 },
+      };
+      const store = memoryStore({ clock, digest });
+      const economy = createEconomy(
+        makePorts(store, { clock, digest, ids, config }),
+      );
+      t.after(() => economy.close());
+      const holds = createBalanceHolds({ store, config, digest });
+      const userId = 'usr_seller';
+      const amount = credit('10.00');
+      const payout = (key: string, value = amount) =>
+        requestPayout({
+          userId,
+          amount: value,
+          idempotencyKey: key,
+          actor: { kind: 'user', userId },
+        });
+
+      await store.transaction(async (unit) => {
+        await lockAll(unit.ledger, [earned(userId), SYSTEM.OPENING_EQUITY]);
+        await postEntry(unit.ledger, {
+          txnId: 'txn_return_seed',
+          legs: [
+            debitLeg(SYSTEM.OPENING_EQUITY, amount),
+            creditLeg(earned(userId), amount),
+          ],
+          meta: { kind: 'seed', source: 'card' },
+        });
+      });
+      clock.advance(config.maturityHorizonMs.card);
+      assert.deepEqual(
+        (await holds.read({ userId, now: clock.now() })).available,
+        amount,
+      );
+      const requested = await economy.submit(payout('original_payout'));
+      assert.ok(requested.status === 'committed');
+      const sagaId = requested.transaction.meta.sagaId;
+      assert.ok(typeof sagaId === 'string');
+
+      if (path === 'manual reversal') {
+        clock.advance(10);
+        const reversed = await economy.submit(buildReversePayout({ sagaId }));
+        assert.equal(reversed.status, 'committed');
+      } else {
+        const worker = makeWorkerCtx({ clock, digest, ids, config });
+        clock.advance(config.payoutSla.PENDING!);
+        const submitted = await advanceDuePayouts(store, worker, {
+          now: clock.now(),
+          limit: 10,
+        });
+        assert.deepEqual(submitted.submitted, [sagaId]);
+        clock.advance(config.maxPayoutAgeMs + 1);
+        const failed = await advanceDuePayouts(store, worker, {
+          now: clock.now(),
+          limit: 10,
+        });
+        assert.deepEqual(
+          failed.deadLettered.map((entry) => entry.id),
+          [sagaId],
+        );
+      }
+
+      assert.equal(await stateOf(store, sagaId), 'FAILED');
+      const availableAt = clock.now() + config.maturityHorizonMs.default;
+      const pending = {
+        pending: amount,
+        available: credit('0.00'),
+        reserved: credit('0.00'),
+        total: amount,
+      };
+      assert.deepEqual(await holds.read({ userId, now: clock.now() }), pending);
+      clock.advance(config.maturityHorizonMs.default - 1);
+      assert.deepEqual(await holds.read({ userId, now: clock.now() }), pending);
+      const early = await economy.submit(payout('early_payout'));
+      assert.ok(early.status === 'rejected');
+      assert.deepEqual(early.detail, {
+        reason: 'FUNDS_IMMATURE',
+        source: 'unknown',
+        availableAt,
+      });
+      await assert.rejects(
+        holds.place({
+          userId,
+          holdId: 'returned_funds',
+          amount: credit('5.00'),
+          releaseEvent: 'review_complete',
+          now: clock.now(),
+        }),
+        hasCode('LEDGER.OVERDRAFT'),
+      );
+
+      clock.advance(1);
+      assert.deepEqual(await holds.read({ userId, now: clock.now() }), {
+        ...pending,
+        pending: credit('0.00'),
+        available: amount,
+      });
+      const held = await holds.place({
+        userId,
+        holdId: 'returned_funds',
+        amount: credit('5.00'),
+        releaseEvent: 'review_complete',
+        now: clock.now(),
+      });
+      assert.equal(held.status, 'committed');
+      const paid = await economy.submit(
+        payout('mature_payout', credit('5.00')),
+      );
+      assert.equal(paid.status, 'committed');
+    });
+  }
 });
 
 describe('reversePayout — Refusals & Validation', () => {
