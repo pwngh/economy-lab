@@ -154,7 +154,8 @@ describeEngine('mysql', 'MySQL case-sensitive account and hold IDs', (rig) => {
         try {
           assert.ok(pool);
           const callerPool = pool;
-          const assertCallerSessions = async () => {
+          const originalSessions = new Map<object, string[]>();
+          const assertCallerSessions = async (capture: boolean) => {
             const connections: MysqlConnection[] = [];
             try {
               connections.push(await callerPool.getConnection());
@@ -171,17 +172,33 @@ describeEngine('mysql', 'MySQL case-sensitive account and hold IDs', (rig) => {
                     collation: string;
                   }>
                 )[0]!;
-                assert.deepEqual(
-                  [original.client, original.results, original.collation],
-                  ['utf8mb4', 'utf8mb4', 'utf8mb4_0900_ai_ci'],
-                );
+                const identity = connection.connection;
+                assert.ok(identity);
+                const settings = [
+                  original.client,
+                  original.results,
+                  original.collation,
+                ];
+                if (capture) {
+                  assert.equal(original.client, 'utf8mb4');
+                  assert.equal(original.results, 'utf8mb4');
+                  // mysql2 can use general_ci for a later connection after SET NAMES.
+                  assert.match(
+                    original.collation,
+                    /^utf8mb4_(?:0900_ai|general)_ci$/,
+                  );
+                  originalSessions.set(identity, settings);
+                } else {
+                  assert.ok(originalSessions.has(identity));
+                  assert.deepEqual(settings, originalSessions.get(identity));
+                }
               }
             } finally {
               for (const connection of connections) connection.release();
             }
           };
           // Setup must return both sessions with their original settings.
-          await assertCallerSessions();
+          await assertCallerSessions(true);
           const [routines] = await pool.query(
             `SELECT ROUTINE_NAME AS name, COLLATION_CONNECTION AS creation_collation
              FROM information_schema.ROUTINES
@@ -220,7 +237,7 @@ describeEngine('mysql', 'MySQL case-sensitive account and hold IDs', (rig) => {
             applyMysqlSchema(interruptedPool),
             (error: unknown) => error === setupFailure,
           );
-          await assertCallerSessions();
+          await assertCallerSessions(false);
           const owner = 'usr_Review';
           const otherOwner = 'usr_review';
           // Both accounts in one posting also exercise the routine's JSON_TABLE joins.
