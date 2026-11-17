@@ -18,7 +18,7 @@
 -- retain the connection collation used at creation, so pin it before creating them, including
 -- when this file runs through the CLI. The binary collation also preserves trailing spaces.
 -- Applying by hand: USE the target database first. Requires MySQL 8.0.17 or newer.
-SET NAMES utf8mb4 COLLATE utf8mb4_0900_bin;
+SET SESSION collation_connection = 'utf8mb4_0900_bin';
 ALTER DATABASE CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_bin;
 
 -- Drop stored routines first: unlike DROP TABLE they have no IF-EXISTS-on-CREATE form, so re-apply

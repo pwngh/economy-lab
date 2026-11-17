@@ -2938,32 +2938,24 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
   const sql = await readFile(path, 'utf8');
   // The schema pins database and routine-creation collations before any DROP/CREATE. This keeps
   // identifiers distinct in both stored rows and post_entry's JSON_TABLE joins, including when
-  // scripts/migrate.sh applies the same file through the CLI. Keep SET NAMES and routine
+  // scripts/migrate.sh applies the same file through the CLI. Keep the collation setting and routine
   // creation on one connection; a pool may distribute separate queries across sessions.
   const connection = await pool.getConnection();
   try {
     const [rows] = await connection.query(
-      `SELECT @@character_set_client AS client, @@character_set_results AS results,
-              @@collation_connection AS collation`,
+      'SELECT @@collation_connection AS collation',
     );
-    const original = (
-      rows as Array<{
-        client: string;
-        results: string | null;
-        collation: string;
-      }>
-    )[0]!;
+    const original = (rows as Array<{ collation: string }>)[0]!.collation;
     try {
       for (const statement of splitSqlStatements(sql)) {
         await connection.query(statement);
       }
     } finally {
-      // SET NAMES is only for schema creation; the next borrower keeps the pool's settings.
       // Restoring collation_connection also restores its matching character_set_connection.
-      await connection.query(
-        'SET character_set_client = ?, character_set_results = ?, collation_connection = ?',
-        [original.client, original.results, original.collation],
-      );
+      // Leave client/result encodings alone so the driver's connection settings stay intact.
+      await connection.query('SET SESSION collation_connection = ?', [
+        original,
+      ]);
     }
   } finally {
     connection.release();
