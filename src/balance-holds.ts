@@ -20,17 +20,25 @@ import type { Digest, Ledger, Store, Unit } from '#src/ports.ts';
 
 export type PlaceBalanceHold = {
   userId: string;
+  /** A new ID for this user's hold. A matching retry returns the original receipt. */
   holdId: string;
+  /** Positive CREDIT taken from available earnings. */
   amount: Amount;
+  /** Epoch milliseconds at which the hold becomes eligible for release. */
   expiresAt?: number;
+  /** Event name that permits release when the host later verifies it. */
   releaseEvent?: string;
+  /** The host's current time in epoch milliseconds; never read from a system clock. */
   now: number;
 };
 export type ReleaseBalanceHold = {
   userId: string;
   holdId: string;
+  /** Identifies one release request across this user's holds. Reuse it for retries. */
   idempotencyKey: string;
+  /** Omit to release the entire remainder. A partial release must be positive CREDIT. */
   amount?: Amount;
+  /** Host-verified event; must match the opening event unless the deadline has been reached. */
   event?: string;
   now: number;
 };
@@ -40,15 +48,23 @@ export type BalanceHoldResult = {
   amount: Amount;
 };
 export type BalanceAvailability = {
+  /** Unheld earnings whose waiting period has not ended. */
   pending: Amount;
+  /** Unheld earnings whose waiting period has ended. Other payout policies still apply. */
   available: Amount;
+  /** Earnings in balance holds; excludes funds already reserved for accepted payouts. */
   reserved: Amount;
+  /** pending + available + reserved. An accepted payout leaves this total. */
   total: Amount;
 };
 export type BalanceHolds = {
+  /** Reserve available earnings until an event or deadline permits release. */
   place(input: PlaceBalanceHold): Promise<BalanceHoldResult>;
+  /** Return held earnings to available funds without starting another waiting period. */
   release(input: ReleaseBalanceHold): Promise<BalanceHoldResult>;
+  /** Release due remainders, each in its own transaction. An interrupted call can be retried. */
   expire(input: { userId: string; now: number }): Promise<BalanceHoldResult[]>;
+  /** Read balances without releasing expired holds. */
   read(input: { userId: string; now: number }): Promise<BalanceAvailability>;
 };
 type Dependencies = { store: Store; config: CheckedConfig; digest: Digest };
@@ -59,10 +75,13 @@ type Opening = {
 };
 
 /**
- * In-process, trusted-host API for holds on seller earnings. It authorizes no callers and
- * sends no external payments. The existing requestPayout operation spends the unheld earned
- * balance. Accepted payouts leave this balance total; reserved here means balance holds only.
- * All hold history must remain in hot storage. Archival is deliberately unsupported.
+ * Creates the in-process API for holds on seller earnings. Use the same store, configuration,
+ * digest, and clock as the Economy instance that handles payouts. The host authorizes callers,
+ * verifies events, and schedules expiry calls. No timer runs inside this API.
+ *
+ * Hold IDs belong to one user and cannot be reused for a new hold. Release keys also belong to
+ * one user, across all their holds. Matching retries return the original receipt even with a
+ * later `now`; changed business inputs are refused. Complete history must stay in active storage.
  */
 export function createBalanceHolds(input: {
   store: Store;
@@ -136,7 +155,7 @@ function openingId(
 async function unarchived(deps: Dependencies): Promise<void> {
   if ((await deps.store.checkpoints.archiveState?.()) != null) {
     broken(
-      'Balance holds require their full hot ledger history; archival is unsupported.',
+      'Balance holds require complete ledger history in active storage; archival is unsupported.',
     );
   }
 }
@@ -168,7 +187,9 @@ async function checkedBalance(
     return sum + value.minor;
   }, 0n);
   if (minor !== live.minor || minor < 0n)
-    broken('A balance does not re-derive from its hot ledger entries.');
+    broken(
+      'A balance is negative or does not match its active ledger entries.',
+    );
   return live;
 }
 async function available(
@@ -218,7 +239,7 @@ async function place(
     const duplicate = await existing(deps, unit.ledger, txnId, request);
     if (duplicate) return duplicate;
     if (previouslyUsed)
-      broken('A previously used hold account has lost its opening posting.');
+      broken('A previously used hold account is missing its opening entry.');
     const funds = await available(deps, unit, input.userId, input.now);
     // Accrual debt is a separate payout policy, not a ledger balance bucket.
     const debt = await unit.accruals.netPending(input.userId);

@@ -1,7 +1,7 @@
 ---
 title: 'Credit maturity'
-summary: 'Funds clear on a delay: spends drain oldest-first, so the matured balance is the cleared part of the newest run of lots, never money still in its settlement wait.'
-plain: "If you have ever deposited a check and watched the money sit as “pending” before you could spend it, you already understand credit maturity: fresh funds have to clear a waiting period before they count as truly yours to cash out."
+summary: 'Separate earnings that are still waiting, funds that can be paid out, and funds reserved by a balance hold.'
+plain: 'An account can have money in it without all of that money being available. Some credits must finish a waiting period; others may have been set aside in a hold.'
 order: 65
 status: stable
 sourceRefs:
@@ -9,6 +9,7 @@ sourceRefs:
     'src/maturity.ts#L315 · maturedBalance',
     'src/maturity.ts#L349 · maturedAtLeast',
     'src/maturity.ts#L52 · maturityHorizonMs',
+    'src/balance-holds.ts · createBalanceHolds',
   ]
 related:
   [
@@ -18,63 +19,88 @@ related:
   ]
 ---
 
-Not every credit a user holds can be cashed out the instant it lands. The money behind a fresh credit can still be pulled back by a card chargeback or a disputed payment. So the platform makes new funds wait out a settlement window before they count as cleared. Credit maturity is how that wait is modeled and measured.
+Credit maturity is a waiting period before funds can be used. The wait depends on the funding source and the host's configuration. A credit is **matured** when its arrival time plus that wait is no later than the time being checked.
 
-## The idea
+This is an availability rule. A payment can still be reversed after the wait ends; maturity does not remove that risk.
 
-An account's balance isn't one undifferentiated number. It's a stack of dated **lots**: each top-up and each credit earned lands as a lot stamped with when it arrived. A lot **matures** once it has waited out its settlement window. Until then it is still clearing.
+## When the clock starts
 
-The matured balance is the part of the live balance whose lots have cleared their wait. A cash-out can draw only that part.
+Each incoming credit creates a dated **lot**: an amount, an arrival time, and a funding source. The source selects a wait through `maturityHorizonMs`. An unlisted source uses the `default` wait.
+
+The clock starts when the credit reaches the account being read. With the [accrual split](/economy/concepts/accrual-split/), a sale first places the seller's share in a settlement account. The later drain posts it to `earned`, and the earned lot's wait starts at that posting.
+
+Outside production, an unset wait is `0`, so development funds are available immediately. Production requires an explicit card wait; other unset waits fall back to it. See [maturity configuration](/economy/reference/configuration/#maturity-horizons).
+
+## Spendable wallets: oldest funds are used first
+
+Wallet spending uses the oldest credits first. The remaining balance therefore comes from the newest lots, sometimes called the **FIFO tail**. If a spend uses only part of a lot, its remainder keeps the original arrival time. The ledger does not rewrite the lot; reads work out the remainder from the recorded amounts.
+
+For a wallet whose lots share one wait, the picture looks like this:
 
 <CreditMaturity />
 
-## Why it exists
+Different sources can have different waits. A newer lot with a shorter wait may mature before an older one, so the calculation checks each lot's own deadline.
 
-[Spending](/economy/reference/operations/spend/) and [paying out](/economy/reference/operations/request-payout/) move real value, and some of the money behind a fresh credit can still reverse. A card payment can be charged back days after it clears the app. If the platform let a user spend or cash out that credit immediately and the underlying payment then reversed, it would be out real money with nothing left to claw back.
+## Seller earnings: preserve funds that are still waiting
 
-The maturity window holds new funds just long enough that, by the time they mature, the risk of a reversal has passed.
+A payout or a balance hold may use only matured earnings. That needs a different calculation from wallet spending: the oldest earned lot might still be waiting while a newer one is already available.
 
-The gate is visible at the call site. A seller whose raw <ApiLink to="functions/economy-lab.earned" /> balance covers a cash-out is still refused while that money is inside its window:
+Earned-account reads replay the ledger history in order. New payouts and holds use eligible lots and leave pending lots alone. Historical payouts without the eligibility timestamp keep their earlier oldest-first allocation. A released hold returns money that had already matured, so the release does not start another waiting period.
+
+For example, suppose a seller has 400 minor units still waiting and 600 available:
+
+| Action | Pending | Available | Reserved | Total |
+| --- | ---: | ---: | ---: | ---: |
+| Starting balance | 400 | 600 | 0 | 1,000 |
+| Place a hold for 500 | 400 | 100 | 500 | 1,000 |
+| Accept a payout of 100 | 400 | 0 | 500 | 900 |
+| Release 200 from the hold | 400 | 200 | 300 | 900 |
+
+The pending 400 stays untouched throughout. The payout leaves this total because it has moved into the separate payout workflow. If that payout is later reversed or the worker gives up on it, the returned credits start the configured `default` wait again. With a nonzero wait they return as pending, unlike a hold release.
+
+## Balance holds
+
+<ApiLink to="functions/economy-lab.createBalanceHolds" /> reports four amounts for a seller:
+
+- **Pending:** earned credits whose waiting period has not ended.
+- **Available:** matured earnings that are not in a balance hold. Payout policy can still reject a request, for example because of debt or a minimum amount.
+- **Reserved:** earnings moved into balance-hold accounts.
+- **Total:** the sum of pending, available, and reserved.
+
+A balance hold is a ledger transfer, not a pause flag. Placing one moves available credit from `earned` to a reserved account. Releasing it moves credit back. A hold needs an expiry time, a release event, or both. Either a matching event or a reached deadline permits a release. Supply `amount` to release part of the hold; omit it to return the remainder.
+
+Passing the deadline does not move the money by itself. The host calls `expire({ userId, now })` from its scheduler to release due holds. Times are explicit epoch milliseconds. A read checks eligibility at `now` against the current ledger; it is not a snapshot of an earlier balance. The host supplies a consistent clock, authorizes callers, and verifies events.
+
+Retry an opening with the same `userId` and `holdId`. Retry a release with the same `userId` and `idempotencyKey`. Matching retries return the original receipt, while changed business inputs are refused. Each new hold needs a new ID, including after an earlier hold has been fully released. Hold calls throw on invalid input or insufficient funds; payout requests instead return business declines as outcomes.
+
+Balance holds and `PAYOUT_RESERVE` have different jobs. A hold sets earnings aside before a payout is accepted. `PAYOUT_RESERVE` contains credits already committed to the [payout workflow](/economy/concepts/payout-saga/) and is not part of the balance API's `reserved` amount.
+
+## What a payout can use
+
+[`requestPayout`](/economy/reference/operations/request-payout/) reads the seller's unheld `earned` balance. It then checks whether enough of that balance has matured, along with debt and other payout rules. For example:
 
 ```ts
 import { requestPayout, userActor, toAmount } from '@pwngh/economy-lab';
 
-// the earned balance covers 24,000 credits, but today's sales are still clearing
+// The account has enough earned credit, but some is still waiting.
 const outcome = await economy.submit(
   requestPayout({
     idempotencyKey: 'po_2201',
     actor: userActor('usr_s1'),
     userId: 'usr_s1',
-    amount: toAmount('CREDIT', 2_400_000n), // ≈ $120 at the payout rate
+    amount: toAmount('CREDIT', 2_400_000n),
   }),
 );
-// → { status: "rejected", reason: "FUNDS_IMMATURE" } — same key retries cleanly once the window passes
+// An immature request returns status: 'rejected', with detail.reason: 'FUNDS_IMMATURE'.
+// A rejected request can use the same key again after the waiting period ends.
 ```
 
-## Lots and the FIFO tail
+If a hold has removed too much from `earned`, the request instead returns `INSUFFICIENT_FUNDS`. `FUNDS_IMMATURE` means the unheld balance is large enough, but not enough of it has finished waiting.
 
-Spends draw **oldest-first**: first in, first out. So once past spends have drained the oldest lots, what's left is the _newest_ run of lots, the ones that together sum to the current balance. That run is the **tail**.
+## Read cost and limits
 
-Maturity then splits the tail. A maturity horizon (now minus the settlement wait) falls somewhere along it. Lots older than the horizon have matured; the newest lots are still waiting. The matured balance is that cleared part of the tail.
+`maturedBalance` returns the matured amount at `now`. `maturedAtLeast` answers whether that amount covers a particular request and stops adding amounts once it has enough.
 
-A partial spend does split a lot, but only in the arithmetic. When the drained amount stops partway through a lot, the tail keeps that lot's remainder with its original arrival time. No stored lot is rewritten; the split is re-derived on every read.
+For spendable wallets, both read the newest lots in pages and stop when those lots cover the live balance. Earned accounts first replay their full history, even when the requested payout is small. That makes the allocation easy to check, but the work grows with account history.
 
-A lot's clock starts when its posting lands in the account. Under the [accrual split](/economy/concepts/accrual-split/), a sale parks the seller's share in a settlement account first, and the drain later posts it to `earned`. So an earned lot's arrival time is the drain posting, and its settlement wait counts from then.
-
-The horizon depends on how the funds arrived. `maturityHorizonMs` returns the wait per funding source. An unrecognized source falls back to a conservative `default`. A lot matures at its arrival time plus that wait.
-
-The horizons split by environment. Outside production every unset horizon is `0`, so a fresh dev economy clears funds instantly. In production the card horizon must be stated explicitly, and every other rail defaults to it (see [the configuration reference](/economy/reference/configuration/#maturity-horizons)).
-
-## How it's measured
-
-Computing the matured balance never scans an account's whole history. Because the answer lives entirely in the tail, the read walks lots **newest-first** and stops the moment they cover the live balance.
-
-`maturedBalance` returns the full matured amount as of `now`. `maturedAtLeast` answers the cheaper question its callers actually ask: _is the matured balance at least this much?_ It returns the instant its running sum clears the threshold. A request well within cleared funds settles after a lot or two, never the full history. By construction the two agree: `maturedAtLeast` is just `maturedBalance` stopped early. (`maturedBalanceFullScan` keeps the naive whole-history version, used only to differential-test the fast path.)
-
-The computation is currency-agnostic: the same call covers a user's spendable credits and a seller's earned balance.
-
-## What relies on it
-
-- [`spend`](/economy/reference/operations/spend/) gates on the matured-balance check for the buyer's spendable credits, so a spend can't draw funds still clearing.
-- [`requestPayout`](/economy/reference/operations/request-payout/) gates on the same check for a seller's earned balance — a payout only ever draws cleared money.
-- The configured [maturity horizons](/economy/reference/configuration/#maturity-horizons) set each wait, and [solvency](/economy/concepts/solvency/) is the backing those cleared funds draw against.
+Balance holds currently require the complete, unarchived ledger history. The shared tests check earned balances against an independent model; `maturedBalanceFullScan` is the separate reference calculation for the wallet FIFO path.

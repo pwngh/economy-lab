@@ -1,33 +1,57 @@
 # Economy Lab
 
-Economy Lab is a TypeScript double-entry ledger for credits, seller earnings, and payouts. Its balance-holds library separates pending earnings, available funds, and reserved holds using ledger entries. The local proof uses invented data and runs the same scenarios on memory, PostgreSQL, MySQL, and the HTTP store adapter.
+Economy Lab is a TypeScript double-entry ledger for credits, seller earnings, and payouts. It tracks which earnings are still waiting, which are available for payout, and which are set aside in a hold. Its balance-holds demo uses invented data to check the same rules on memory, PostgreSQL, MySQL, and the HTTP store adapter.
 
-## Run the balance proof
+## How the balances work
 
-Install Node 22.18 or newer and Docker with a running daemon, then run from a clean checkout:
+| Balance   | Meaning                                                          |
+| --------- | ---------------------------------------------------------------- |
+| Pending   | Earnings that have not finished their configured waiting period. |
+| Available | Earnings that have finished that wait and are not held.          |
+| Reserved  | Earnings set aside in balance holds.                             |
+| Total     | The sum of pending, available, and reserved earnings.            |
+
+A hold moves available earnings into reserved. A release moves them back without starting another waiting period. Both movements are ledger entries, so the balances can be rebuilt from the record of what happened. The rule is `pending + available + reserved = total`.
+
+For example, a seller earns 1,000 minor units. Once they become available, a hold of 700 leaves 300 available for payout. A request for 301 is refused; a request for 300 succeeds. The remaining total is then 700, all reserved.
+
+An accepted payout leaves this total and enters Economy Lab's existing payout process. Its separate payout reserve is not included in the `reserved` balance above. Debt, payout minimums, and other payout rules can still block a request even when enough earnings are available.
+
+If a payout is reversed or the worker gives up on it, the returned credits go back to `earned` and start the default waiting period again. A hold release returns funds as available immediately.
+
+## Run the demo and tests
+
+You need Node 22.18 or newer, Docker, and a running Docker daemon. From a clean checkout, run:
 
 ```sh
 npm run demo:balances
 ```
 
-The command installs locked dependencies, builds the workspace packages, creates two temporary databases on a private Docker network, runs the shared tests in Node with the checkout mounted read-only, and removes its containers, volumes, and network. No database ports are published. It needs network access for npm packages and uncached images; it needs no account, API key, or paid service. It does not read `.env` or use existing databases.
+The command installs the locked dependencies, builds the packages, starts temporary PostgreSQL and MySQL databases, and runs the tests across all four adapters. It then removes the containers, database volumes, and private Docker network it created. A successful run exits with code 0 and prints:
 
-The demo script is [scripts/demo-balances.mjs](scripts/demo-balances.mjs). Its executable scenarios are [test/conformance/balance-holds.test.ts](test/conformance/balance-holds.test.ts):
+```text
+balance proof: passed with memory, PostgreSQL, MySQL, and HTTP
+```
 
-1. Credit 1,000 invented minor units. Before the maturity boundary all 1,000 are pending; at the boundary they become available.
-2. Reserve 700 in a hold. A payout of 301 fails; a payout of 300 succeeds. The remaining total is 700 reserved.
-3. Release part of a hold on a matching event, retry the same request, and expire only the remainder. Advance an explicit timestamp; the hold tests never sleep.
-4. Race two full-balance payouts. Exactly one commits. On each SQL store a barrier puts both transactions inside the database before either acquires the account lock.
-5. Run seeded programs of holds, partial releases, expirations, payouts, and retries. Compare every step with an independent model and balances recomputed from entries.
+The runner mounts the checkout read-only inside its test container. It publishes no database ports, does not read `.env`, and does not use your existing databases. Network access is needed to download npm packages and any Docker images that are not already cached; no account, API key, or paid service is needed.
+
+The [demo script](scripts/demo-balances.mjs) runs these [executable scenarios](test/conformance/balance-holds.test.ts), each with separate test data:
+
+1. Add 1,000 units of earnings and advance the supplied time. They are pending before the waiting period ends and available at its boundary.
+2. Hold 700 units, reject a payout of 301, and accept a payout of 300.
+3. Release 200 from a 700-unit hold after a matching event. Repeat the request without moving money again, then expire the remaining 500 at the deadline.
+4. Request two payouts that each need the full available balance. Exactly one succeeds. On each SQL store, a barrier makes both database transactions start before either can take the account lock.
+5. Run repeatable sequences of holds, partial releases, expirations, payouts, and retries. After every step, compare the balances with an independent model and with the ledger entries.
 
 ## Use the library
 
-Use the same `store`, `config`, and `digest` supplied to your Economy instance:
+Create the holds API with the same `store`, `config`, and `digest` as your Economy instance. The account must already have enough available earnings; this example assumes at least 700. The timestamps are invented epoch milliseconds, passed explicitly so the example needs no real timer.
 
 ```ts
 import { createBalanceHolds, toAmount } from '@pwngh/economy-lab';
 
 const holds = createBalanceHolds({ store, config, digest });
+
 await holds.place({
   userId: 'usr_example',
   holdId: 'delivery_1',
@@ -36,6 +60,7 @@ await holds.place({
   expiresAt: 1_000,
   now: 100,
 });
+
 await holds.release({
   userId: 'usr_example',
   holdId: 'delivery_1',
@@ -44,45 +69,52 @@ await holds.release({
   event: 'delivery_confirmed',
   now: 200,
 });
+
 await holds.expire({ userId: 'usr_example', now: 1_000 });
 const balance = await holds.read({ userId: 'usr_example', now: 1_000 });
 ```
 
-The account must already have enough available earnings. Continue to request payouts with `economy.submit(requestPayout(...))`; its existing transaction locks and idempotency protect the payout. Existing debt and payout-policy checks can additionally refuse a request. `pending + available + reserved = total` describes earnings still managed by this API. An accepted payout leaves that total and enters the existing payout saga; `reserved` here counts balance holds only.
+A hold needs an expiry time, a release event, or both. Either a matching event or a reached deadline allows a release. Supply `amount` for a partial release; omit it to release the remainder. `read()` reports balances without changing them. Your scheduler must call `expire()` to release due holds; the deadline alone moves no money.
 
-This is a trusted in-process API: the host authorizes callers, verifies events, supplies time, and invokes expiry from its scheduler. A timer becoming due does not itself post an entry. `place` and `release` return a committed or duplicate receipt; malformed input, a conflicting retry, or unavailable funds throw a typed `EconomyError`.
+Use a new `holdId` for each new hold, even after an earlier hold is fully released. Retry the same opening with the same hold ID. Retry a release with the same `idempotencyKey`: that key identifies one release request for the user across all their holds. A later `now` is allowed on a retry; reusing an identity with different business inputs is refused.
 
-## Tests and measurements
+Successful `place` and `release` calls return a receipt with `committed` or `duplicate` status. Invalid input, conflicting retries, insufficient funds, or broken history throw a typed `EconomyError`.
 
-`npm run demo:balances` is the complete, strict feature test command. Missing database coverage fails it. After dependencies and packages are built, `npm run test:balances` runs against configured stores; unavailable SQL stores are explicitly skipped unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
+Continue to request payouts through `economy.submit(requestPayout(...))`. Holds and payouts use the same account lock, and payout requests retain their existing idempotency checks. Your application must authorize callers, verify events, supply a consistent clock and policy, and schedule expiry. Each hold expires in its own transaction, so an interrupted sweep can be retried to finish the remaining holds.
 
-The observed feature run passed 44 tests with zero skips across four adapters. Each adapter ran 32 seeded programs and 624 generated steps: 128 programs and 2,496 steps in total. There were 48 payout races, including 24 pairs proven to overlap inside PostgreSQL/MySQL transactions; exactly one payout committed in each pair. The clean-checkout test phase took about 54 seconds in the local Docker run, excluding dependency installation and builds. These are correctness measurements, not a throughput benchmark or proof over all possible programs.
+## What the tests show
 
-The wider repository gate is `npm run check`; it additionally needs generated API documentation, application dependencies, and other local services. See [test/README.md](test/README.md) for the repository test conventions.
+`npm run demo:balances` is the complete feature check: it fails if database coverage is missing. Once dependencies and packages are built, `npm run test:balances` uses configured stores instead. That shorter command reports unavailable SQL stores as skips unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
 
-## Existing ledger workflows
+A recorded feature run passed 44 tests with no skips across four adapters. Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 54 seconds, excluding installation and builds.
 
-The rest of Economy Lab remains available: wallets, marketplace sales, refunds, subscriptions, payout processing, and integrity checks. The existing worker runs 16 sweeps; it and the local service use the module at [economy/app.ts](economy/app.ts).
+These checks exercise a reproducible sample of operation sequences. They are evidence of correctness for those cases, not a throughput benchmark or a proof of every possible sequence.
+
+The broader repository check is `npm run check`. It also needs generated API documentation, app dependencies, and other local services. [The test guide](test/README.md) describes that setup and the repository's test conventions.
+
+## Other ledger workflows
+
+Economy Lab also supports wallets, marketplace sales, refunds, subscriptions, payout processing, and integrity checks. The existing worker runs 16 sweeps; it and the local service use [economy/app.ts](economy/app.ts).
 
 ```sh
-npm run dev          # existing local development service
-npm test             # root test suite; unavailable backends report skips
+npm run dev          # start the existing local development service
+npm test             # root tests; unavailable backends report skips
 npm run prove        # randomized ledger invariant checks
 npm run fuzz         # compare storage implementations
 ```
 
-The [Economy API](https://economy-lab-docs.pages.dev/economy/reference/the-economy/), [ledger accounts](https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/), [worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/), and [package guide](https://economy-lab-docs.pages.dev/economy/ports/packages/) cover those workflows. The existing [documentation app](apps/docs) and [console](apps/console) retain their own sources and setup; this feature adds no endpoints or screens.
+The [Economy API](https://economy-lab-docs.pages.dev/economy/reference/the-economy/), [ledger accounts](https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/), [worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/), and [package guide](https://economy-lab-docs.pages.dev/economy/ports/packages/) describe those workflows. The [documentation app](apps/docs) and [console](apps/console) have their own setup instructions. Balance holds add an in-process API; they add no endpoints or screens.
 
-## Limits
+## Limits and next steps
 
-- Holds reserve matured CREDIT earnings only. Currency conversion, fees, an API server, and a UI were not added for this feature.
-- Full hot ledger history is required. The holds API refuses recorded archival or missing opening evidence; archive-aware releases are not implemented.
-- SQL schema version 19 adds the reserved account kind. The demo uses fresh databases; upgrading an existing persistent database is not automated by this feature.
-- Earned maturity reads replay account history, and hold discovery scans account names. This favors inspectable correctness over large-account throughput.
-- This API reads the store directly. Hosts using other cached wallet reads must invalidate them or allow their configured expiry after a hold change.
-- Event delivery, authorization, clock accuracy, and scheduling belong to the host. Tests use fakes and local databases; no external payout rail is exercised.
-- Administrative ledger edits, historical payout allocation before this version, and arbitrary changes to maturity policy are outside the generated model.
+- Holds apply to matured CREDIT earnings. This feature adds no currency conversion, fees, API server, or UI.
+- The complete hold history must remain in active ledger storage. Recorded archival or a missing opening entry causes an error; releasing holds from archived history is not supported.
+- SQL schema version 19 adds the reserved account kind. The demo creates fresh databases. This feature does not automate upgrades of existing databases.
+- Balance reads scan earnings history, and finding holds scans account names. Read cost grows with that data; an indexed projection is not implemented.
+- The holds API reads the store directly. If your application caches wallet reads elsewhere, it must invalidate those caches after a hold change or wait for their configured expiry.
+- The host owns event delivery, authorization, clock accuracy, and scheduling. Tests use local databases and fakes; they do not execute a payment through an external provider.
+- The generated model does not cover administrative ledger edits, payout allocation before this version, or arbitrary changes to the waiting-period rules.
 
-With two more days, I would add an indexed hold-discovery projection checked against the ledger and measure read cost as history grows, then design retention that preserves active hold evidence.
+With two more days, I would index hold discovery, check that index against the ledger, and measure read cost as history grows. Next I would design archival that keeps enough evidence to release active holds safely.
 
-The one-page [invariants and enforcement note](BALANCE_HOLDS.md) and [decisions](DECISIONS.md) describe the implementation boundaries. The existing [documentation](https://economy-lab-docs.pages.dev/economy/) covers the ledger, stores, payout saga, subscriptions, and other packages. License: [MIT](LICENSE.md).
+The one-page [invariants and enforcement note](BALANCE_HOLDS.md) explains the rules and their tests. [DECISIONS.md](DECISIONS.md) records the tradeoffs. The full [documentation](https://economy-lab-docs.pages.dev/economy/) covers the rest of the ledger. License: [MIT](LICENSE.md).

@@ -117,6 +117,12 @@ Both legs are in `CREDIT` and sum to zero, so the books stay
 The `FAILED` state change and this posting commit in the same transaction, so the credits return only
 if the saga also stops.
 
+Returned payout credits start the configured `default` [maturity wait](/economy/concepts/credit-maturity/)
+again, from the return posting's timestamp. The same rule applies when the worker gives up on a
+payout. With a nonzero wait, these credits are pending before they become available again. A
+[balance-hold release](/economy/concepts/credit-maturity/#balance-holds) behaves differently: it
+returns already-matured earnings without another wait.
+
 ## Authorization
 
 Only a privileged [`Principal`](/economy/concepts/actors-and-authorization/) may call

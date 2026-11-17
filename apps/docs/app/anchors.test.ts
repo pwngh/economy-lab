@@ -149,11 +149,11 @@ describe('docs↔source anchors resolve against the library tree', () => {
     // Exact, not a floor. A collector that silently stops seeing a family of chips — which is how
     // six `kind 'topUp'` chips hid behind their own quoting — moves these numbers.
     expect(inventory.pages.length).toBe(76);
-    expect(inventory.frontmatterEntries).toBe(230);
+    expect(inventory.frontmatterEntries).toBe(231);
     expect(inventory.sourceLinkTags).toBe(57);
     // Every raw hit became a chip: nothing was dropped between the scan and the parse.
     expect(inventory.chips.length).toBe(inventory.frontmatterEntries + inventory.sourceLinkTags);
-    expect(inventory.chips.length).toBe(287);
+    expect(inventory.chips.length).toBe(288);
     expect(inventory.unparsed).toEqual([]);
   });
 
@@ -170,8 +170,8 @@ describe('docs↔source anchors resolve against the library tree', () => {
   });
 
   test(`the exemption: ${fileOnly.length} chips name a file and no line — ${fileOnlyLabeled.length} name a symbol, ${bare.length} are bare and admitted by page`, () => {
-    expect(fileOnly.length).toBe(116);
-    expect(fileOnlyLabeled.length).toBe(88);
+    expect(fileOnly.length).toBe(117);
+    expect(fileOnlyLabeled.length).toBe(89);
     // Every bare chip is on the roster and every admission still has its chip, in one comparison:
     // a new bare chip has to be argued into BARE_ADMITTED, and an admission whose chip has since
     // gained a label — or left the page — is residue, not an admission.

@@ -96,9 +96,9 @@ page explains what a minor unit is.
 | Variable                  | Meaning                                                                                                                                                                                | Default            |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
 | `PAYOUT_MIN_EARNED_MINOR` | Smallest payout a user may request, counted only against _earned_ CREDIT, not bought or promo-granted. The floor keeps a disbursement from costing more in rail fees than it pays out. | `2000000` (≈ $100 at the payout rate) |
-| `PAYOUT_MIN_INTERVAL_MS`  | Minimum time between a user's payout requests. The platform the example models requires 14 days between payouts, so a production deploy sets `1209600000`. The 24h default keeps a dev loop from waiting two weeks. | `86400000` (24h)   |
-| `MAX_PAYOUT_ATTEMPTS`     | Provider attempts for one payout before the system gives up and reverses it.                                                                                                           | `5`                |
-| `MAX_PAYOUT_AGE_MS`       | Longest a payout may sit in `SUBMITTED` before the worker force-fails it as timed out, because the provider never reported back. The default outlasts a rail's one-to-two business-day settlement. | `259200000` (3d)   |
+| `PAYOUT_MIN_INTERVAL_MS`  | Cooldown after the most recent update to any of the seller's payout records. Processing and settlement updates can postpone `retryAt`. Choose the interval as deployment policy. | `86400000` (24h)   |
+| `MAX_PAYOUT_ATTEMPTS`     | Maximum attempts to hand a payout to the provider. Exhausting attempts does not prove the payment failed; an unknown outcome waits for the timeout policy. | `5`                |
+| `MAX_PAYOUT_AGE_MS`       | Maximum age of a `SUBMITTED` payout before the worker can time it out, subject to any status reported by the provider. | `259200000` (3d)   |
 | `PAYOUT_FEE_BPS`          | Payout-rail fee in basis points, charged on the USD a seller cashes out. This is the rail's own cut, deducted from the disbursement, not platform revenue.                            | `150` (≈ 1.5%)     |
 
 The `payout` rate and the per-state payout SLAs also feed the saga. The SLAs live under the
@@ -131,22 +131,24 @@ step stuck past its threshold is overdue. `DEFAULT` covers any state not named.
 
 ## Maturity horizons
 
-Topped-up funds wait before they can be spent or paid out. The wait is keyed by funding
-source. An unlisted source falls back to the `default` entry. See [credit
-maturity](/economy/concepts/credit-maturity/) for why the holding period exists.
+Incoming credits can have a waiting period before they are eligible to spend or pay out. The
+funding source selects the wait; an unlisted source uses the `default` entry. This is a policy
+for availability, not a guarantee that a payment can no longer be reversed. See [credit
+maturity](/economy/concepts/credit-maturity/) for how the ledger calculates it.
 
-The horizons split by environment. Outside production, every unset horizon is `0`. Funds clear
-instantly, so the zero-config quickstart's top-up can be spent in the next line. In production,
-`MATURITY_HORIZON_CARD_MS` is required. Startup fails fast and names it, like the secrets. A
-real deployment states its chargeback window rather than inheriting a silent policy number.
+Outside production, unset waits default to `0`, so the quickstart can spend a top-up immediately.
+In production, `MATURITY_HORIZON_CARD_MS` must be set explicitly; other unset waits fall back to
+it. Choose the waits for the deployment's funding sources and risk policy. These waits are separate
+from [balance holds](/economy/concepts/credit-maturity/#balance-holds), which move already-matured
+earnings into reserved accounts until the host releases them.
 
 | Variable                      | Meaning                                                                                                | Default             |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------- |
-| `MATURITY_HORIZON_CARD_MS`    | Hold for a card top-up: its chargeback window. The anchor every other rail defaults to.               | dev `0` / prod req. |
-| `MATURITY_HORIZON_CRYPTO_MS`  | Hold for a crypto top-up.                                                                              | `= card`            |
-| `MATURITY_HORIZON_STEAM_MS`   | Hold for a Steam-store top-up. Defaults to the card horizon until the rail's refund window is decided. | `= card`            |
-| `MATURITY_HORIZON_META_MS`    | Hold for a Meta-store top-up. Same conservative default as Steam.                                      | `= card`            |
-| `MATURITY_HORIZON_DEFAULT_MS` | Hold for an unlisted funding source. Falls back to the card horizon.                                   | `= card`            |
+| `MATURITY_HORIZON_CARD_MS`    | Waiting period for credits with source `card`. Other unset source waits fall back to this value.               | dev `0` / prod req. |
+| `MATURITY_HORIZON_CRYPTO_MS`  | Waiting period for credits with source `crypto`.                                                                              | `= card`            |
+| `MATURITY_HORIZON_STEAM_MS`   | Waiting period for credits with source `steam`. | `= card`            |
+| `MATURITY_HORIZON_META_MS`    | Waiting period for credits with source `meta`.                                      | `= card`            |
+| `MATURITY_HORIZON_DEFAULT_MS` | Waiting period for an unlisted funding source, including returned payout credits.                                   | `= card`            |
 
 ## Fees and the risk gate
 

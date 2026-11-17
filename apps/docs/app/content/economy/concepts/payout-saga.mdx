@@ -1,7 +1,7 @@
 ---
 title: 'The payout saga'
-summary: 'A payout reaches an external rail that answers in its own time, so it runs as a stored state machine: reserve, submit, settle — every transition a compare-and-set that posts its money in the same transaction.'
-plain: "A “state machine” is anything that can only be in one of a few named states at a time and can only move between them along set paths — think of a package that goes “shipped → out for delivery → delivered,” never the other way. A payout runs exactly like that, so an interruption can only ever leave it parked on a known step."
+summary: 'Track a payout from reserved credits to a confirmed payment or a return to the seller. Store each step so the worker can retry after an interruption.'
+plain: 'A payout takes more than one request to finish. Its stored state tells the worker what has happened and what it can safely try next.'
 order: 60
 status: stable
 notes:
@@ -25,9 +25,9 @@ related:
 
 import payoutHtml from '../../../snippets/payout.ts?shiki';
 
-A <ApiLink to="variables/economy-lab.topUp" /> or a <ApiLink to="variables/economy-lab.spend" /> finishes the instant you call it. A payout can't: it reaches an external rail that answers in its own time.
+A <ApiLink to="variables/economy-lab.requestPayout" /> call reserves credits and returns a ledger outcome. The external payment finishes later, after the provider confirms it.
 
-So economy-lab models a payout as an explicit state machine. The operation becomes a stored record (a <ApiLink to="interfaces/ports.Saga" />) that the [background worker](/economy/reference/background-worker/) advances one safe step at a time.<Cite n={1} /> If a crash interrupts the work, the record resumes from its last recorded state. A step that runs twice still counts once.
+The stored record is a <ApiLink to="interfaces/ports.Saga" />. The [background worker](/economy/reference/background-worker/) advances it through named states, recording each completed step.<Cite n={1} /> After an interruption, the worker can read that state and retry the unfinished work.
 
 ## Why it exists
 
@@ -43,16 +43,16 @@ The same shape covers anything that outlives one request. [Subscriptions](/econo
 
 `requestPayout` does not pay. It reserves the credits (`debit earned → credit payout_reserve`, two [`CREDIT` legs](/economy/concepts/accounts-and-double-entry/) that cancel out). It also opens a `Saga`: a record whose `state` walks through `SagaState` (see <SourceLink to="src/ports.ts#L1729-L1735 · SAGA_STATES" />).
 
-The full enum declares `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. A live payout starts at `RESERVED`, because the credits were set aside in the same database transaction that opened the saga. A row still sitting at `REQUESTED` means that opening transaction crashed partway through. The worker's claim sweep skips such rows on purpose — a half-opened payout is never driven forward. Watch the row appear:
+The enum includes `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`. Normal requests start at `RESERVED`: setting aside the credits and creating the record happen in one database transaction. A crash rolls back both or leaves both committed. The worker does not advance `REQUESTED` rows. Run the example to see the opening record:
 
 <Runnable name="payout" html={payoutHtml} />
 
 | State       | Meaning                                                                                                          | What advances it                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | `RESERVED`  | Credits locked in `payout_reserve`; nothing sent to the rail yet.                                                | The worker's `payouts` sweep.      |
-| `SUBMITTED` | The sweep converted the reserve to USD and called the payout rail.                                               | The provider's settlement webhook. |
+| `SUBMITTED` | Payment hand-off has started; the provider's outcome may still be unknown.                                               | The provider's settlement webhook. |
 | `SETTLED`   | The rail confirmed; the reserve clears to `revenue` and an equal sum of USD leaves `trust_cash` for the seller. | Terminal.                          |
-| `FAILED`    | The payout was given up on; the reserve returns to the seller's `earned`.                                       | Terminal.                          |
+| `FAILED`    | The payout failed or was reversed; credits returned to `earned` with a new default maturity wait.                                       | Terminal.                          |
 
 <PayoutSaga />
 
@@ -73,16 +73,19 @@ Three guards let the worker retry a step without paying twice.
 - **A stuck payout is given up on.** A submit throw the rail classified non-retryable fails the payout at once — a refusal is not an unknown outcome to wait on. Otherwise `maxPayoutAttempts` only bounds how often the rail is re-asked, and it is `maxPayoutAgeMs` in `SUBMITTED` — with no settlement webhook and no provider evidence to the contrary — that force-fails a payout whose answer never came. Either way the sweep flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`). That returns the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
 
 <Callout type="warning">
-  `requestPayout` only pays out
-  [*matured* earnings](/economy/concepts/credit-maturity/). The raw `earned` balance can
-  pass while part of it is still inside its chargeback window, so a second,
-  stricter gate rejects with
-  [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/) unless the
-  *cleared* portion covers the request (see{' '}
+  A payout requires [matured, unheld earnings](/economy/concepts/credit-maturity/).
+  It can return [`FUNDS_IMMATURE`](/economy/reference/outcomes-and-reason-codes/)
+  even when the raw `earned` balance covers the amount (see{' '}
   <SourceLink to="src/operations/requestPayout.ts#L74-L104 · requestPayout">source</SourceLink>
-  ). It also declines `BELOW_MINIMUM` under `payoutMinimumEarnedMinor` and
-  `PAYOUT_TOO_SOON` within `payoutMinIntervalMs` of the user's last request.
+  ). Minimums, debt, and other payout rules still apply. The cooldown runs from
+  the most recent update to any of the seller's payout records, so processing
+  activity can postpone the next request.
 </Callout>
+
+A payout reversal and a worker give-up return credits to `earned` with a new `default`
+maturity wait, measured from the return posting. If that wait is nonzero, the credits return
+as pending. A [balance-hold release](/economy/concepts/credit-maturity/#balance-holds)
+returns already-matured credit immediately; it does not use this payout-return policy.
 
 That force-fail reversal and the operator's `reversePayout` share one compare-and-set guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost compare-and-set means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can force the same early reversal with `reversePayout`, but only while the money hasn't already left.
 

@@ -115,8 +115,8 @@ export interface Config {
   payoutMinimumEarnedMinor: bigint;
 
   /**
-   * Min time (ms) between payout requests. The default is 24h to match the live docs. A
-   * deployment bound by the 14-day legal requirement must set 1_209_600_000.
+   * Minimum wait (ms) since the user's latest payout saga update, in any state. Processing a
+   * payout can restart this wait. The default is 24 hours; zero disables the cooldown.
    */
   payoutMinIntervalMs: number;
 

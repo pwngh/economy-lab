@@ -94,13 +94,13 @@ function Acct({
   );
 }
 
-/** The fixed chart of accounts, with `spendable` backed one-for-one by `TRUST_CASH`; mirrors `src/accounts.ts`. */
+/** The chart of accounts, with custodial credits backed at the configured par rate; mirrors `src/accounts.ts`. */
 export function ChartOfAccounts() {
   return (
     <Diagram
-      viewBox="0 0 760 306"
-      label="The chart of accounts. A user holds four CREDIT accounts: spendable (backed by trust cash), earned, promo, and per-session escrow (also backed, since escrow is custodial). The platform holds eleven house accounts: the USD accounts trust_cash, usd_clearing, and revenue_usd; and the CREDIT accounts stored_value, promo_float, receivable, revenue, payout_reserve, opening_equity, settlement_accrual, and netting_clearing. A user's spendable balance is backed one-for-one by trust_cash."
-      caption="The fixed chart of accounts. A user's spendable credits — and the per-session escrow a prefunded fast lane parks them in — are backed one-for-one by USD in trust_cash; every other account is the platform's own cash, revenue, or a contra entry. settlement_accrual holds sellers' parked shares between charge and drain; netting_clearing is the pass-through a session's net settles across."
+      viewBox="0 0 760 362"
+      label="The chart of accounts. Users have five CREDIT account kinds: spendable, earned, promo, escrow, and reserved. Spendable and per-session escrow count toward trust backing. Each balance hold has a reserved account for held seller earnings. The platform has eleven house accounts: three in USD and eight in CREDIT. PAYOUT_RESERVE is separate from user balance holds."
+      caption="Spendable credits and session escrow count toward trust backing. Earned credits are owed to sellers; reserved credits are earnings set aside in balance holds. PAYOUT_RESERVE holds credits for accepted payouts. Platform accounts record the matching cash, revenue, and obligations."
     >
       <ArrowDefs />
 
@@ -111,6 +111,7 @@ export function ChartOfAccounts() {
       <Acct x={40} y={96} w={190} name="earned" note="CREDIT, owed to seller" />
       <Acct x={40} y={152} w={190} name="promo" note="CREDIT, expires if unspent" />
       <Acct x={40} y={208} w={190} name="escrow" note="CREDIT, per session, backed" />
+      <Acct x={40} y={264} w={190} name="reserved" note="CREDIT, held earnings" />
 
       <text className="d-head" x={527} y={22} textAnchor="middle">
         PLATFORM (HOUSE) ACCOUNTS
@@ -133,15 +134,15 @@ export function ChartOfAccounts() {
         backed
       </text>
       <text className="d-elabel" x={273} y={78} textAnchor="middle">
-        one-for-one
+        at par rate
       </text>
 
-      <rect className="d-box usd" x={40} y={270} width={16} height={12} rx={2} />
-      <text className="d-sub" x={62} y={280}>
+      <rect className="d-box usd" x={40} y={326} width={16} height={12} rx={2} />
+      <text className="d-sub" x={62} y={336}>
         USD account
       </text>
-      <rect className="d-box" x={170} y={270} width={16} height={12} rx={2} />
-      <text className="d-sub" x={192} y={280}>
+      <rect className="d-box" x={170} y={326} width={16} height={12} rx={2} />
+      <text className="d-sub" x={192} y={336}>
         CREDIT account
       </text>
     </Diagram>
@@ -652,22 +653,22 @@ export function WorkerSweeps() {
   );
 }
 
-/** Credit maturity, dated lots draining oldest-first with the matured tail a cash-out may draw; mirrors `src/maturity.ts`. */
+/** A spendable wallet with one shared maturity wait; earned-account replay follows different allocation rules. */
 export function CreditMaturity() {
   const xs = [30, 124, 218, 312, 406, 500, 594];
   const w = 84;
-  const matLine = 495; // between the matured tail and the still-clearing tail
+  const matLine = 495; // between matured lots and lots that are still waiting
   return (
     <Diagram
       viewBox="0 0 760 262"
-      label="Credit maturity. An account's funds are dated lots, oldest on the left. Past spends drained the two oldest lots, because spends draw oldest-first. The five newest lots are the live balance, the FIFO tail. A maturity horizon falls inside that tail: the three lots older than the horizon have matured; the two newest are still in their settlement wait. The matured balance is the cleared part of the tail."
-      caption="Spends drain oldest-first, so the live balance is the newest run of lots. The matured part is only the lots within that run that have passed their maturity horizon (now minus the settlement wait) — the tail read sums them newest-first and stops once it covers the balance."
+      label="Maturity in a spendable wallet whose lots share one wait. Lots are oldest on the left. Past spends used the two oldest lots, leaving the five newest as the current balance. Three remaining lots have matured and two are still waiting. The three matured lots are eligible to spend. Seller earnings use a separate ledger replay, described below."
+      caption="Wallet spending uses the oldest credits first. In this example, all lots share one waiting period: three remaining lots have matured and two are still waiting. Earned-account reads also account for payouts and holds that must leave pending lots untouched."
     >
       <ArrowDefs />
 
       {/* tail bracket over the five newest lots */}
       <text className="d-elabel" x={(xs[2] + xs[6] + w) / 2} y={42} textAnchor="middle">
-        live balance — newest lots, the FIFO tail
+        live spendable balance — newest lots
       </text>
       <path
         className="d-edge"
@@ -697,14 +698,14 @@ export function CreditMaturity() {
         fill="none"
       />
       <text className="d-name" x={(xs[2] + xs[4] + w) / 2} y={196} textAnchor="middle">
-        matured — spendable and payable
+        matured — eligible to spend
       </text>
 
       <text className="d-sub" x={xs[0]} y={196} textAnchor="start">
         spent (drained first)
       </text>
       <text className="d-sub" x={xs[5] + 8} y={196} textAnchor="start">
-        still clearing
+        still waiting
       </text>
 
       {/* time axis */}
