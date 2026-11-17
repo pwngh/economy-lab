@@ -25,11 +25,11 @@ This is an availability rule. A payment can still be reversed after the wait end
 
 ## When the clock starts
 
-Each incoming credit creates a dated **lot**: an amount, an arrival time, and a funding source. The source selects a wait through `maturityHorizonMs`. An unlisted source uses the `default` wait.
+Each incoming credit creates a dated **lot**: an amount, an arrival time, and a funding source. The source selects a wait through `maturityHorizonMs`. If no wait is configured for that source, lookup falls back to `default`, then `card`, then `0`.
 
 The clock starts when the credit reaches the account being read. With the [accrual split](/economy/concepts/accrual-split/), a sale first places the seller's share in a settlement account. The later drain posts it to `earned`, and the earned lot's wait starts at that posting.
 
-Outside production, an unset wait is `0`, so development funds are available immediately. Production requires an explicit card wait; other unset waits fall back to it. See [maturity configuration](/economy/reference/configuration/#maturity-horizons).
+The environment loader defaults an omitted card wait to `0` outside production and requires it in production. Other omitted waits inherit the card value in either environment. The quickstart therefore has no wait unless one is configured. See [maturity configuration](/economy/reference/configuration/#maturity-horizons).
 
 ## Spendable wallets: oldest funds are used first
 
@@ -56,7 +56,7 @@ For example, suppose a seller has 400 minor units still waiting and 600 availabl
 | Accept a payout of 100 | 400 | 0 | 500 | 900 |
 | Release 200 from the hold | 400 | 200 | 300 | 900 |
 
-The pending 400 stays untouched throughout. The payout leaves this total because it has moved into the separate payout workflow. If that payout is later reversed or the worker gives up on it, the returned credits start the configured `default` wait again. With a nonzero wait they return as pending, unlike a hold release.
+The pending 400 stays untouched throughout. The payout leaves this total because it has moved into the separate payout workflow. If that payout is later reversed or the worker gives up on it, the returned credits start the wait for an untagged funding source (normally `default`) again. With a nonzero wait they return as pending, unlike a hold release.
 
 ## Balance holds
 
@@ -103,4 +103,6 @@ If a hold has removed too much from `earned`, the request instead returns `INSUF
 
 For spendable wallets, both read the newest lots in pages and stop when those lots cover the live balance. Earned accounts first replay their full history, even when the requested payout is small. That makes the allocation easy to check, but the work grows with account history.
 
-Balance holds currently require the complete, unarchived ledger history. The shared tests check earned balances against an independent model; `maturedBalanceFullScan` is the separate reference calculation for the wallet FIFO path.
+The host must keep the complete ledger history in active storage. The holds API rejects a known archive when the adapter exposes `archiveState`; the HTTP adapter does not expose that check. A missing hold opening is still refused, but these checks do not replace the host's retention responsibility.
+
+The shared tests check earned balances against an independent model; `maturedBalanceFullScan` is the separate reference calculation for the wallet FIFO path.

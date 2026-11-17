@@ -190,24 +190,24 @@ function State({
 export function PayoutSaga() {
   return (
     <Diagram
-      viewBox="0 0 760 250"
-      label="The payout saga state machine. A live payout starts RESERVED. The payouts sweep submits the saga's stored USD quote to the rail and advances it to SUBMITTED. The provider's settlement webhook advances SUBMITTED to SETTLED, a terminal state. From RESERVED or SUBMITTED a timeout, exhausted attempts, or an operator reversal force-fail the saga to FAILED, returning the reserve to the seller's earned account. SagaState also declares REQUESTED, but a live payout opens already RESERVED."
-      caption="The payout saga. Each transition is a compare-and-set, and the transitions that move money post it in the same transaction, so a re-driven step pays at most once. SETTLED and FAILED are terminal; the reserve is released exactly once."
+      viewBox="0 0 760 290"
+      label="A payout starts RESERVED. The worker commits SUBMITTED before calling the provider. A settlement webhook advances it to SETTLED. A reversal can move RESERVED to FAILED. Provider failure, an eligible reversal, or the timeout policy can move SUBMITTED to FAILED. FAILED returns the credits to earned. Reaching the attempt limit stops hand-off retries; an unknown outcome still waits for the timeout policy. REQUESTED exists in the enum but is not the opening state."
+      caption="The worker records SUBMITTED before calling the provider. The attempt limit stops retries without declaring an unknown payment failed. Settlement, a permitted reversal, or the timeout policy determines what happens to the reserve. SETTLED and FAILED are terminal."
     >
       <ArrowDefs />
 
       <State x={70} y={48} name="RESERVED" sub="reserve held" />
-      <State x={314} y={48} name="SUBMITTED" sub="sent to rail" />
+      <State x={314} y={48} name="SUBMITTED" sub="outcome pending" />
       <State x={558} y={48} name="SETTLED" sub="terminal" variant="ok" />
-      <State x={314} y={158} name="FAILED" sub="terminal" variant="bad" />
+      <State x={314} y={190} name="FAILED" sub="credits returned" variant="bad" />
 
       {/* forward path */}
       <line className="d-edge" x1={202} y1={70} x2={310} y2={70} markerEnd="url(#dgm-arrow)" />
       <text className="d-elabel" x={256} y={56} textAnchor="middle">
-        payouts sweep
+        worker commits
       </text>
       <text className="d-elabel" x={256} y={92} textAnchor="middle">
-        submits USD quote
+        then calls provider
       </text>
 
       <line className="d-edge" x1={446} y1={70} x2={554} y2={70} markerEnd="url(#dgm-arrow)" />
@@ -218,22 +218,23 @@ export function PayoutSaga() {
         webhook
       </text>
 
-      {/* force-fail branch */}
-      <path
-        className="d-edge bad"
-        d="M136,92 C136,150 250,150 310,168"
-        fill="none"
-        markerEnd="url(#dgm-arrow)"
-      />
-      <line className="d-edge bad" x1={380} y1={92} x2={380} y2={154} markerEnd="url(#dgm-arrow)" />
-      <text className="d-elabel" x={470} y={150} textAnchor="start">
-        timeout, max attempts, reverse
+      {/* Failure exits depend on whether submission has started. */}
+      <path className="d-edge bad" d="M136,92 V212 H310" fill="none" markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={156} y={160} textAnchor="start">
+        operator reversal
       </text>
-      <text className="d-elabel" x={470} y={166} textAnchor="start">
-        → reserve returns to earned
+      <line className="d-edge bad" x1={380} y1={92} x2={380} y2={186} markerEnd="url(#dgm-arrow)" />
+      <text className="d-elabel" x={400} y={135} textAnchor="start">
+        provider failure,
+      </text>
+      <text className="d-elabel" x={400} y={151} textAnchor="start">
+        eligible reversal,
+      </text>
+      <text className="d-elabel" x={400} y={167} textAnchor="start">
+        or timeout
       </text>
 
-      <text className="d-note" x={70} y={232}>
+      <text className="d-note" x={70} y={264}>
         SagaState also declares REQUESTED; a live payout opens already RESERVED, in the same
         transaction as the reservation.
       </text>

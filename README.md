@@ -17,7 +17,7 @@ For example, a seller earns 1,000 minor units. Once they become available, a hol
 
 An accepted payout leaves this total and enters Economy Lab's existing payout process. Its separate payout reserve is not included in the `reserved` balance above. Debt, payout minimums, and other payout rules can still block a request even when enough earnings are available.
 
-If a payout is reversed or the worker gives up on it, the returned credits go back to `earned` and start the default waiting period again. A hold release returns funds as available immediately.
+If a payout is reversed or the worker gives up on it, the returned credits go back to `earned` and wait again. The usual configuration uses the `default` period. A host that supplies a separate `unknown` period uses that instead, because the return has no funding-source tag. A hold release returns funds as available immediately.
 
 ## Run the demo and tests
 
@@ -86,7 +86,7 @@ Continue to request payouts through `economy.submit(requestPayout(...))`. Holds 
 
 `npm run demo:balances` is the complete feature check: it fails if database coverage is missing. Once dependencies and packages are built, `npm run test:balances` uses configured stores instead. That shorter command reports unavailable SQL stores as skips unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
 
-A recorded feature run passed 44 tests with no skips across four adapters. Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 54 seconds, excluding installation and builds.
+A recorded feature run passed 44 tests with no skips across four adapters. Each adapter ran 32 generated programs and checked 624 steps: 128 programs and 2,496 steps overall. All 48 payout races had exactly one winner, including 24 pairs that overlapped inside PostgreSQL or MySQL transactions. In one local Docker run, the test phase took about 26 seconds, excluding installation and builds.
 
 These checks exercise a reproducible sample of operation sequences. They are evidence of correctness for those cases, not a throughput benchmark or a proof of every possible sequence.
 
@@ -108,7 +108,7 @@ The [Economy API](https://economy-lab-docs.pages.dev/economy/reference/the-econo
 ## Limits and next steps
 
 - Holds apply to matured CREDIT earnings. This feature adds no currency conversion, fees, API server, or UI.
-- The complete hold history must remain in active ledger storage. Recorded archival or a missing opening entry causes an error; releasing holds from archived history is not supported.
+- The host must keep complete hold history in active storage. The API rejects recorded archival when the store exposes archive state; the HTTP adapter cannot report that state. Missing opening entries cause an error. Releasing holds from archived history is not supported.
 - SQL schema version 19 adds the reserved account kind. The demo creates fresh databases. This feature does not automate upgrades of existing databases.
 - Balance reads scan earnings history, and finding holds scans account names. Read cost grows with that data; an indexed projection is not implemented.
 - The holds API reads the store directly. If your application caches wallet reads elsewhere, it must invalidate those caches after a hold change or wait for their configured expiry.

@@ -476,8 +476,8 @@ export function missingPolicyAnchors(
 }
 
 function buildConfig(env: EnvMap): Config {
-  // Outside production unset horizons are 0, so the zero-config quickstart's topUp → spend
-  // works. Production must state the card horizon, the anchor every other rail defaults to.
+  // Outside production the card wait defaults to 0. Other unset waits inherit the card value.
+  // Production must state the card wait explicitly; the zero-config quickstart can spend at once.
   const horizon = boundsOf('maturityHorizonMs');
   const sla = boundsOf('payoutSla');
   const cardHorizonMs = readInt(env.MATURITY_HORIZON_CARD_MS, 0, horizon);

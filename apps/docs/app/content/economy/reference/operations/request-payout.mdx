@@ -71,7 +71,7 @@ The payload fields, beyond the `kind` tag, are:
 | `userId`         | `string`                                                   | (required) | The seller whose available earnings will fund the payout. |
 | `amount`         | [`Amount`](/economy/concepts/money-model/)                 | (required) | How much earned credit to set aside. Must be `CREDIT` and strictly positive. |
 
-The request uses `CREDIT` from `earned`, not from a wallet's `spendable` or `promo` balance. If the payout settles, the stored quote determines the USD payment. If it fails and is reversed, the reserved credits return to `earned` and start the configured `default` maturity wait again. This differs from a balance-hold release, which makes its returned credits available immediately.
+The request uses `CREDIT` from `earned`, not from a wallet's `spendable` or `promo` balance. If the payout settles, the stored quote determines the USD payment. If it fails and is reversed, the reserved credits return to `earned` and start the maturity wait for an untagged funding source (normally `default`) again. This differs from a balance-hold release, which makes its returned credits available immediately.
 
 ## Returns
 

@@ -46,8 +46,8 @@ const DEFAULT_SOURCE: string = 'default';
 /**
  * Returns the configured wait in milliseconds before credits from a funding source can be used.
  * Passing this wait does not prove settlement or rule out a later reversal. A source absent from
- * the config uses the 'default' horizon, then 'card', then zero if both are unset. Validated
- * configuration supplies these defaults; callers choose the waiting periods for their policy.
+ * the config uses the 'default' horizon, then 'card', then zero if both are unset. Configuration
+ * builders supply defaults; validation alone does not fill in missing source waits.
  */
 export function maturityHorizonMs(source: string, config: Config): number {
   const horizons = config.maturityHorizonMs;

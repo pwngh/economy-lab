@@ -49,16 +49,16 @@ The enum includes `REQUESTED`, `RESERVED`, `SUBMITTED`, `SETTLED`, and `FAILED`.
 
 | State       | Meaning                                                                                                          | What advances it                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `RESERVED`  | Credits locked in `payout_reserve`; nothing sent to the rail yet.                                                | The worker's `payouts` sweep.      |
-| `SUBMITTED` | Payment hand-off has started; the provider's outcome may still be unknown.                                               | The provider's settlement webhook. |
+| `RESERVED` | Credits set aside in `payout_reserve`; no provider call has started. | The worker begins submission, or a reversal returns the credits. |
+| `SUBMITTED` | Submission was recorded before the provider call; the payment outcome may still be unknown. | A settlement webhook, provider failure, eligible reversal, or timeout. |
 | `SETTLED`   | The rail confirmed; the reserve clears to `revenue` and an equal sum of USD leaves `trust_cash` for the seller. | Terminal.                          |
-| `FAILED`    | The payout failed or was reversed; credits returned to `earned` with a new default maturity wait.                                       | Terminal.                          |
+| `FAILED` | The payout failed or was reversed; credits returned to `earned` with a new maturity wait. | Terminal. |
 
 <PayoutSaga />
 
 ## The two triggers
 
-The two forward steps run on different triggers. The worker's `payouts` sweep handles only the first. It claims due `RESERVED` sagas and submits each saga's stored USD quote via `processor.submitPayout`. The quote was priced once, at request. The sweep records the `providerRef` and advances `RESERVED → SUBMITTED` (see <SourceLink to="src/worker/payouts.ts#L368-L389 · submitToProvider" />).
+The worker's `payouts` sweep first commits `RESERVED → SUBMITTED`, then calls `processor.submitPayout` with the USD quote stored at request time. If the provider returns a reference, the worker records it. Recording `SUBMITTED` before the call matters: a lost response leaves the payment outcome unknown, so the worker cannot safely treat the reserve as unused (see <SourceLink to="src/worker/payouts.ts#L368-L389 · submitToProvider" />).
 
 It does not settle itself. Settlement arrives on the provider's verified "payout settled" webhook. That webhook maps to a [`settlePayout`](/economy/reference/operations/settle-payout/) operation, which the worker's inbox drain applies off the request path. That operation runs the `SUBMITTED → SETTLED` step.
 
@@ -70,7 +70,7 @@ Three guards let the worker retry a step without paying twice.
 
 - **The call to the rail is idempotent**, keyed by the saga id (`key: saga.id`), so a retried submit still pays once. The settlement webhook is deduped on the provider's event id, so a redelivered settlement settles once.
 - **Each state change is a compare-and-set.**<Cite n={2} /> `sagas.advance(id, from, to, patch)` moves a saga only if it is still in `from`, and returns `false` (changing nothing) otherwise. So two sweeps racing the same saga can't both advance it. A step that re-asserts the state it is already in gets no exclusion from that predicate, because every racing sweep satisfies it; such a step passes `expectAttempts` as a second predicate, which is how the attempt counter stays exact (see <SourceLink to="src/ports.ts#L1098-L1104 · SagaStore.advance" />).
-- **A stuck payout is given up on.** A submit throw the rail classified non-retryable fails the payout at once — a refusal is not an unknown outcome to wait on. Otherwise `maxPayoutAttempts` only bounds how often the rail is re-asked, and it is `maxPayoutAgeMs` in `SUBMITTED` — with no settlement webhook and no provider evidence to the contrary — that force-fails a payout whose answer never came. Either way the sweep flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`). That returns the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
+- **A stuck payout is given up on.** A submit throw the rail classified non-retryable fails the payout at once — a refusal is not an unknown outcome to wait on. Otherwise `maxPayoutAttempts` stops further hand-off retries without declaring the payment failed. An unknown outcome remains `SUBMITTED` until the timeout policy permits a return: past `maxPayoutAgeMs`, with no settlement webhook and no provider evidence that blocks the timeout. Either way the sweep flips the saga to `FAILED` and, in the same transaction, posts the exact reverse of the reservation (`debit payout_reserve → credit earned`). That returns the credits to the seller (see <SourceLink to="src/worker/payouts.ts#L114-L181 · deadLetter" />).
 
 <Callout type="warning">
   A payout requires [matured, unheld earnings](/economy/concepts/credit-maturity/).
@@ -82,12 +82,12 @@ Three guards let the worker retry a step without paying twice.
   activity can postpone the next request.
 </Callout>
 
-A payout reversal and a worker give-up return credits to `earned` with a new `default`
-maturity wait, measured from the return posting. If that wait is nonzero, the credits return
+A payout reversal and a worker give-up return credits to `earned` with a new maturity wait
+for an untagged funding source (normally `default`), measured from the return posting. If that wait is nonzero, the credits return
 as pending. A [balance-hold release](/economy/concepts/credit-maturity/#balance-holds)
 returns already-matured credit immediately; it does not use this payout-return policy.
 
-That force-fail reversal and the operator's `reversePayout` share one compare-and-set guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost compare-and-set means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can force the same early reversal with `reversePayout`, but only while the money hasn't already left.
+That force-fail reversal and the operator's `reversePayout` share one compare-and-set guard on the saga. A reversal posts the compensating entry _only if_ its compare-and-set wins. A lost compare-and-set means a concurrent settle or reverse already accounted for the reserve, so posting again would return the credits a second time. An operator can reverse a `RESERVED` payout before submission. A `SUBMITTED` payout can be reversed only under its provider-failure or timeout rules; a `SETTLED` payout cannot be reversed.
 
 ## The invariant
 
@@ -102,7 +102,7 @@ A `RESERVED` payout pays at most once, and its reserve is released exactly once:
 The enforcement lives in three places, and you can verify each one in the source.
 
 - **The store's compare-and-set method.** `SagaStore.advance` is a conditional update that returns whether it changed a row, so the handler can detect and stand down on a lost race (see <SourceLink to="src/ports.ts#L1023-L1065 · SagaStore" />).
-- **One transaction per step.** Each forward step posts its ledger entry and advances its record inside `store.transaction`, so a partial step rolls back whole. A flipped state with no posting, or a posting with no flip, can't persist.
+- **One transaction for each money movement.** Reservation, settlement, and reversal commit their ledger entries and state changes together. The submission step moves no money; it records `SUBMITTED` before making the external call.
 - **Idempotent external calls and dedupe.** `processor.submitPayout` is keyed by the saga id (see <SourceLink to="src/ports.ts#L238-L254 · Processor" />). Inbound provider events are deduped by event id before they apply. So a redelivered webhook or a retried submit resolves to the same money move at most once.
 
 ## Operations and ports that rely on it

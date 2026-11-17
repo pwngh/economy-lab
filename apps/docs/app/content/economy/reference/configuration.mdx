@@ -132,13 +132,14 @@ step stuck past its threshold is overdue. `DEFAULT` covers any state not named.
 ## Maturity horizons
 
 Incoming credits can have a waiting period before they are eligible to spend or pay out. The
-funding source selects the wait; an unlisted source uses the `default` entry. This is a policy
+funding source selects the wait; an unlisted source normally uses the `default` entry. This is a policy
 for availability, not a guarantee that a payment can no longer be reversed. See [credit
 maturity](/economy/concepts/credit-maturity/) for how the ledger calculates it.
 
-Outside production, unset waits default to `0`, so the quickstart can spend a top-up immediately.
-In production, `MATURITY_HORIZON_CARD_MS` must be set explicitly; other unset waits fall back to
-it. Choose the waits for the deployment's funding sources and risk policy. These waits are separate
+The environment loader defaults an omitted `MATURITY_HORIZON_CARD_MS` to `0` outside production
+and requires it in production. Other omitted waits inherit the card value in either environment,
+including when a development configuration sets a nonzero card wait. Choose the waits for the
+deployment's funding sources and risk policy. These waits are separate
 from [balance holds](/economy/concepts/credit-maturity/#balance-holds), which move already-matured
 earnings into reserved accounts until the host releases them.
 
@@ -148,7 +149,11 @@ earnings into reserved accounts until the host releases them.
 | `MATURITY_HORIZON_CRYPTO_MS`  | Waiting period for credits with source `crypto`.                                                                              | `= card`            |
 | `MATURITY_HORIZON_STEAM_MS`   | Waiting period for credits with source `steam`. | `= card`            |
 | `MATURITY_HORIZON_META_MS`    | Waiting period for credits with source `meta`.                                      | `= card`            |
-| `MATURITY_HORIZON_DEFAULT_MS` | Waiting period for an unlisted funding source, including returned payout credits.                                   | `= card`            |
+| `MATURITY_HORIZON_DEFAULT_MS` | Fallback wait for an unlisted funding source. Also applies to returned payout credits under environment-built configuration. | `= card`            |
+
+A `Config` supplied in code may define additional source waits. Returned payout credits have no
+source tag, so their lookup uses `unknown` if configured, then `default`, then `card`, then `0`.
+The environment loader does not create an `unknown` entry.
 
 ## Fees and the risk gate
 
