@@ -2942,8 +2942,28 @@ export async function applyMysqlSchema(pool: MysqlPool): Promise<void> {
   // creation on one connection; a pool may distribute separate queries across sessions.
   const connection = await pool.getConnection();
   try {
-    for (const statement of splitSqlStatements(sql)) {
-      await connection.query(statement);
+    const [rows] = await connection.query(
+      `SELECT @@character_set_client AS client, @@character_set_results AS results,
+              @@collation_connection AS collation`,
+    );
+    const original = (
+      rows as Array<{
+        client: string;
+        results: string | null;
+        collation: string;
+      }>
+    )[0]!;
+    try {
+      for (const statement of splitSqlStatements(sql)) {
+        await connection.query(statement);
+      }
+    } finally {
+      // SET NAMES is only for schema creation; the next borrower keeps the pool's settings.
+      // Restoring collation_connection also restores its matching character_set_connection.
+      await connection.query(
+        'SET character_set_client = ?, character_set_results = ?, collation_connection = ?',
+        [original.client, original.results, original.collation],
+      );
     }
   } finally {
     connection.release();

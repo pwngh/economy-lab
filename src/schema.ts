@@ -38,8 +38,9 @@ export function assertSchemaCurrent(
       : `is at schema version ${found}`;
   throw new Error(
     `economy-lab: the ${backend} database ${state}, but this build expects schema version ` +
-      `${SCHEMA_VERSION}. Re-apply the schema with \`make db-migrate\` so the database matches ` +
-      'this code.',
+      `${SCHEMA_VERSION}. For a database with existing data, plan a data-preserving migration ` +
+      'before upgrading. `make db-migrate` drops and recreates tables; use it only to reset ' +
+      'an empty or disposable database.',
   );
 }
 

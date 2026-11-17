@@ -153,6 +153,35 @@ describeEngine('mysql', 'MySQL case-sensitive account and hold IDs', (rig) => {
         });
         try {
           assert.ok(pool);
+          const callerPool = pool;
+          const assertCallerSessions = async () => {
+            const connections: MysqlConnection[] = [];
+            try {
+              connections.push(await callerPool.getConnection());
+              connections.push(await callerPool.getConnection());
+              for (const connection of connections) {
+                const [session] = await connection.query(
+                  `SELECT @@character_set_client AS client, @@character_set_results AS results,
+                          @@collation_connection AS collation`,
+                );
+                const original = (
+                  session as Array<{
+                    client: string;
+                    results: string;
+                    collation: string;
+                  }>
+                )[0]!;
+                assert.deepEqual(
+                  [original.client, original.results, original.collation],
+                  ['utf8mb4', 'utf8mb4', 'utf8mb4_0900_ai_ci'],
+                );
+              }
+            } finally {
+              for (const connection of connections) connection.release();
+            }
+          };
+          // Setup must return both sessions with their original settings.
+          await assertCallerSessions();
           const [routines] = await pool.query(
             `SELECT ROUTINE_NAME AS name, COLLATION_CONNECTION AS creation_collation
              FROM information_schema.ROUTINES
@@ -171,26 +200,27 @@ describeEngine('mysql', 'MySQL case-sensitive account and hold IDs', (rig) => {
               ['trust_record', 'utf8mb4_0900_bin'],
             ],
           );
-          const connections: MysqlConnection[] = [];
-          try {
-            connections.push(await pool.getConnection());
-            connections.push(await pool.getConnection());
-            // Every caller is case-insensitive; routines must keep their creation collation.
-            for (const connection of connections) {
-              await connection.query(
-                'SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci',
-              );
-              const [session] = await connection.query(
-                'SELECT @@collation_connection AS collation',
-              );
-              assert.equal(
-                (session as Array<{ collation: string }>)[0]!.collation,
-                'utf8mb4_0900_ai_ci',
-              );
-            }
-          } finally {
-            for (const connection of connections) connection.release();
-          }
+          const setupFailure = new Error('injected schema setup failure');
+          const interruptedPool: MysqlPool = {
+            query: (sql, params) => callerPool.query(sql, params),
+            getConnection: async () => {
+              const connection = await callerPool.getConnection();
+              return {
+                query: async (sql, params) => {
+                  // SET NAMES reaches the database; stop before any table changes.
+                  if (/^\s*ALTER DATABASE\b/i.test(sql)) throw setupFailure;
+                  return connection.query(sql, params);
+                },
+                release: () => connection.release(),
+              };
+            },
+            end: () => callerPool.end(),
+          };
+          await assert.rejects(
+            applyMysqlSchema(interruptedPool),
+            (error: unknown) => error === setupFailure,
+          );
+          await assertCallerSessions();
           const owner = 'usr_Review';
           const otherOwner = 'usr_review';
           // Both accounts in one posting also exercise the routine's JSON_TABLE joins.
