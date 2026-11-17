@@ -251,6 +251,28 @@ process.exitCode = await runEconomy(['worker'], {
   assert.equal(run.status, 1);
 });
 
+test('a late relayed SIGTERM preserves the graceful exit code', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'economy-late-signal-'));
+  const cli = new URL('../src/index.ts', import.meta.url).href;
+  // A group signal starts the drain; the parent can relay it again just before the bin exits.
+  const source = `import { runEconomy } from ${JSON.stringify(cli)};
+const code = await runEconomy(['dev', '--port', '0'], {
+  stdout: { write(text) {
+    if (text.startsWith('economy dev — ')) process.emit('SIGTERM');
+  } },
+});
+process.kill(process.pid, 'SIGTERM');
+process.exit(code);`;
+  const run = spawnSync(
+    process.execPath,
+    ['--import', TSX, '--input-type=module', '-e', source],
+    { cwd: dir, encoding: 'utf8', env: childEnv(), timeout: 30_000 },
+  );
+  assert.equal(run.error, undefined, run.stderr);
+  assert.equal(run.signal, null, 'the late signal bypassed the graceful exit');
+  assert.equal(run.status, 0, run.stderr);
+});
+
 test('the dev banner is printed only once shutdown can handle a signal', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'economy-ready-signal-'));
   const cwd = process.cwd();
@@ -277,6 +299,7 @@ test('the dev banner is printed only once shutdown can handle a signal', async (
       assert.equal(handled, true, 'the banner preceded the shutdown handler');
     });
   } finally {
+    await new Promise<void>((resolve) => setImmediate(resolve));
     process.chdir(cwd);
   }
 });
@@ -308,8 +331,16 @@ test('an in-process run releases its watcher and its signal handlers', async () 
         await new Promise((r) => setTimeout(r, 150));
         process.emit('SIGTERM');
         assert.equal(await running, 0, `run ${run} did not drain`);
-        // A closed handle leaves the table on the next turn of the loop, not on close().
-        await new Promise((r) => setTimeout(r, 60));
+        // A host that keeps running releases the signal listeners on the next turn.
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        assert.deepEqual(
+          {
+            SIGINT: process.listenerCount('SIGINT'),
+            SIGTERM: process.listenerCount('SIGTERM'),
+          },
+          before,
+          `run ${run} kept signal handlers past the next turn`,
+        );
       }
     });
   } finally {
@@ -323,6 +354,8 @@ test('an in-process run releases its watcher and its signal handlers', async () 
     before,
     'three runs left signal handlers behind',
   );
+  // Watcher close callbacks follow the check phase; let that phase finish before inspecting it.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   // Nothing is left holding the loop open either: a live FSWatcher is a ref'd handle, and
   // node reports it here by name.
   const held = (
