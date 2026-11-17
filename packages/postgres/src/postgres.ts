@@ -103,7 +103,11 @@ import {
   decodeLegs,
   encodeOperation,
 } from '@pwngh/economy-lab/sql-kit';
-import { metaString, metaNumber } from '@pwngh/economy-lab/store-kit';
+import {
+  metaString,
+  metaNumber,
+  holdReleaseLotFields,
+} from '@pwngh/economy-lab/store-kit';
 
 import type {
   EncodedLeg,
@@ -843,6 +847,7 @@ function rowToLot(
     source: metaString(meta, 'source', 'unknown'),
     toppedUpAt: postedAt,
     maturesAt: metaNumber(meta, 'maturesAt', postedAt),
+    ...holdReleaseLotFields(account, meta),
   };
 }
 

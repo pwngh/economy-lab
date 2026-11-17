@@ -1,185 +1,88 @@
-# economy-lab
+# Economy Lab
 
-A provably-solvent credits economy on one double-entry ledger.
+Economy Lab is a TypeScript double-entry ledger for credits, seller earnings, and payouts. Its balance-holds library separates pending earnings, available funds, and reserved holds using ledger entries. The local proof uses invented data and runs the same scenarios on memory, PostgreSQL, MySQL, and the HTTP store adapter.
 
-[![ci](https://github.com/pwngh/economy-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/pwngh/economy-lab/actions/workflows/ci.yml)
-[![runtime deps](https://img.shields.io/badge/runtime_deps-0-3fb950)](test/manifest.test.ts)
-![node](https://img.shields.io/badge/node-%E2%89%A522.18-1f6feb)
-![license](https://img.shields.io/badge/license-MIT-1f6feb)
+## Run the balance proof
 
-**On this page**
+Install Node 22.18 or newer and Docker with a running daemon, then run from a clean checkout:
 
-- [Highlights](#highlights)
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-- [Guarantees](#guarantees)
-- [Ecosystem](#ecosystem)
-- [Run it](#run-it)
-- [Performance](#performance)
-- [Documentation](#documentation)
+```sh
+npm run demo:balances
+```
 
----
+The command installs locked dependencies, builds the workspace packages, creates two temporary databases on a private Docker network, runs the shared tests in Node with the checkout mounted read-only, and removes its containers, volumes, and network. No database ports are published. It needs network access for npm packages and uncached images; it needs no account, API key, or paid service. It does not read `.env` or use existing databases.
 
-> Read the full documentation at [economy-lab-docs.pages.dev](https://economy-lab-docs.pages.dev/economy/), or try the [live console](https://economy-lab-docs.pages.dev/console/).
+The demo script is [scripts/demo-balances.mjs](scripts/demo-balances.mjs). Its executable scenarios are [test/conformance/balance-holds.test.ts](test/conformance/balance-holds.test.ts):
 
-## Highlights
+1. Credit 1,000 invented minor units. Before the maturity boundary all 1,000 are pending; at the boundary they become available.
+2. Reserve 700 in a hold. A payout of 301 fails; a payout of 300 succeeds. The remaining total is 700 reserved.
+3. Release part of a hold on a matching event, retry the same request, and expire only the remainder. Advance an explicit timestamp; the hold tests never sleep.
+4. Race two full-balance payouts. Exactly one commits. On each SQL store a barrier puts both transactions inside the database before either acquires the account lock.
+5. Run seeded programs of holds, partial releases, expirations, payouts, and retries. Compare every step with an independent model and balances recomputed from entries.
 
-- **Zero runtime dependencies** — pure TypeScript. The whole economy runs in memory.
-- **Provably solvent** — `read.health()` snapshots every invariant; `proveEconomy` re-derives them from the log.
-- **Tamper-evident** — every balance folds from an append-only, hash-chained log under signed Merkle checkpoints.
-- **Three ledger stores, one suite** — memory, PostgreSQL and MySQL all pass [`@pwngh/economy-conformance`](packages/conformance). Redis passes the Cache suite, Amazon SQS the Dispatcher suite.
-- **A "no" is a return value** — `submit` returns an `Outcome` and never throws for a rejection.
-- **Supervisor built in** — `./supervisor` watches twelve incident signatures and writes a hash-chained audit trail. Leaving it out is the off switch.
+## Use the library
 
-## Quick start
-
-Build an `Economy`, drive it through a single `submit`, and read derived state through `read`.
-`boot()` with no arguments wires a complete in-memory build — the store, a dev signer, a dev
-rate table, a flat fee policy, an in-memory processor, and a worker — so there is nothing to
-configure:
+Use the same `store`, `config`, and `digest` supplied to your Economy instance:
 
 ```ts
-import { boot, topUp, toAmount, spendable } from '@pwngh/economy-lab';
+import { createBalanceHolds, toAmount } from '@pwngh/economy-lab';
 
-const { economy, worker } = await boot();
-
-// Credit a wallet after a card charge clears.
-const outcome = await economy.submit(
-  topUp({
-    idempotencyKey: 'ord_ada_1',
-    actor: { kind: 'system', service: 'payments' },
-    userId: 'usr_ada',
-    amount: toAmount('CREDIT', 5_000n),
-    source: 'card',
-  }),
-);
-outcome.status; // 'committed'
-
-const balance = await economy.read.balance(spendable('usr_ada'));
-balance.minor; // 5_000n — 50.00 CREDIT in minor units
-
-await worker?.sweep(); // payouts, fees, checkpoints — one background pass
-
-const report = await economy.read.health(); // every solvency & integrity invariant
-report.conserved; // true
-
-await economy.close(); // releases every port in the bag that holds one — pool, cache, client
+const holds = createBalanceHolds({ store, config, digest });
+await holds.place({
+  userId: 'usr_example',
+  holdId: 'delivery_1',
+  amount: toAmount('CREDIT', 700n),
+  releaseEvent: 'delivery_confirmed',
+  expiresAt: 1_000,
+  now: 100,
+});
+await holds.release({
+  userId: 'usr_example',
+  holdId: 'delivery_1',
+  idempotencyKey: 'delivery_part_1',
+  amount: toAmount('CREDIT', 200n),
+  event: 'delivery_confirmed',
+  now: 200,
+});
+await holds.expire({ userId: 'usr_example', now: 1_000 });
+const balance = await holds.read({ userId: 'usr_example', now: 1_000 });
 ```
 
-## Architecture
+The account must already have enough available earnings. Continue to request payouts with `economy.submit(requestPayout(...))`; its existing transaction locks and idempotency protect the payout. Existing debt and payout-policy checks can additionally refuse a request. `pending + available + reserved = total` describes earnings still managed by this API. An accepted payout leaves that total and enters the existing payout saga; `reserved` here counts balance holds only.
 
-```mermaid
-flowchart TB
-    subgraph sync["request path, synchronous"]
-        Client(["`**submit(operation)**`"]):::entry
-        Ops["`**Operations**
-        validate, authorize, post`"]:::proc
-        Client --> Ops
-    end
+This is a trusted in-process API: the host authorizes callers, verifies events, supplies time, and invokes expiry from its scheduler. A timer becoming due does not itself post an entry. `place` and `release` return a committed or duplicate receipt; malformed input, a conflicting retry, or unavailable funds throw a typed `EconomyError`.
 
-    Ledger[("`**Ledger**
-    the book of record
-    append-only, hash-chained, double-entry`")]:::truth
-    Reads["`**Projections**
-    balances, statements, derived`"]:::derived
-    Outbox[["`**Outbox**
-    domain events`"]]:::evt
-    Worker{{"`**Worker**, asynchronous
-    payouts, subscriptions, fees, checkpoints, relay, inbox`"}}:::worker
+## Tests and measurements
 
-    Ops -- "debit = credit" --> Ledger
-    Ledger -- "re-folded on read" --> Reads
-    Ledger -- "same transaction" --> Outbox
-    Worker -. "submit, sweep, checkpoint, apply" .-> Ledger
+`npm run demo:balances` is the complete, strict feature test command. Missing database coverage fails it. After dependencies and packages are built, `npm run test:balances` runs against configured stores; unavailable SQL stores are explicitly skipped unless `BALANCE_HOLDS_REQUIRE_STORES=1`.
 
-    classDef entry fill:#ffffff,stroke:#1f6feb,stroke-width:1.5px,color:#1f2328;
-    classDef proc fill:#f6f8fa,stroke:#57606a,stroke-width:1px,color:#1f2328;
-    classDef truth fill:#1f6feb,stroke:#0b4fc4,stroke-width:2px,color:#ffffff;
-    classDef derived fill:#eaf6ec,stroke:#3fb950,stroke-width:1.5px,color:#1f2328;
-    classDef evt fill:#f3eefb,stroke:#8957e5,stroke-width:1.5px,color:#1f2328;
-    classDef worker fill:#f3eefb,stroke:#8957e5,stroke-width:1.5px,color:#1f2328;
-    style sync fill:#f0f6ff,stroke:#1f6feb,stroke-width:1px,color:#57606a;
+The observed feature run passed 44 tests with zero skips across four adapters. Each adapter ran 32 seeded programs and 624 generated steps: 128 programs and 2,496 steps in total. There were 48 payout races, including 24 pairs proven to overlap inside PostgreSQL/MySQL transactions; exactly one payout committed in each pair. The clean-checkout test phase took about 54 seconds in the local Docker run, excluding dependency installation and builds. These are correctness measurements, not a throughput benchmark or proof over all possible programs.
+
+The wider repository gate is `npm run check`; it additionally needs generated API documentation, application dependencies, and other local services. See [test/README.md](test/README.md) for the repository test conventions.
+
+## Existing ledger workflows
+
+The rest of Economy Lab remains available: wallets, marketplace sales, refunds, subscriptions, payout processing, and integrity checks. The existing local service and worker use the module at [economy/app.ts](economy/app.ts).
+
+```sh
+npm run dev          # existing local development service
+npm test             # root test suite; unavailable backends report skips
+npm run prove        # randomized ledger invariant checks
+npm run fuzz         # compare storage implementations
 ```
 
-The same logic runs in-memory and on PostgreSQL or MySQL through **engines** (databases that
-enforce the invariants natively) and **adapters** (cache and event transports). Each port has its
-own conformance suite, and every implementation passes it.
+The [Economy API](https://economy-lab-docs.pages.dev/economy/reference/the-economy/), [ledger accounts](https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/), [worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/), and [package guide](https://economy-lab-docs.pages.dev/economy/ports/packages/) cover those workflows. The existing [documentation app](apps/docs) and [console](apps/console) retain their own sources and setup; this feature adds no endpoints or screens.
 
-## Guarantees
+## Limits
 
-| Capability                   | Where                                                                                                                  | What it guarantees                                                                                                                        |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Double-entry ledger          | [ledger.ts](src/ledger.ts)                                                                                             | A posting is rejected unless its debit and credit lines net to zero per currency; a balance is the sum of its lines.                      |
-| Tamper-evident history       | [chain.ts](src/chain.ts), [integrity.ts](src/integrity.ts)                                                             | Each posting is hash-chained per account; a signed Merkle checkpoint anchors the whole ledger; `proveChain` locates any altered entry.    |
-| Idempotent requests + outbox | [economy.ts](src/economy.ts), [worker/relay.ts](src/worker/relay.ts)                                                   | A retried request runs once: key, postings, and outbound event all commit in one transaction; duplicates replay.                          |
-| Marketplace + fee policy     | [operations/spend.ts](src/operations/spend.ts), [pricing.ts](src/pricing.ts)                                           | A sale charges the buyer and pays the sellers in one balanced transaction; shares sum to 10,000 basis points; the fee is injected policy. |
-| Payout saga + retries        | [operations/requestPayout.ts](src/operations/requestPayout.ts), [worker/payouts.ts](src/worker/payouts.ts)             | The worker submits a payout. The settlement webhook settles it once, deduped by event id. A stuck payout re-drives, then reverses.        |
-| Recurring subscriptions      | [operations/subscribe.ts](src/operations/subscribe.ts), [worker/subscriptions.ts](src/worker/subscriptions.ts)         | Each period bills once; an underfunded renewal lapses instead of overdrawing.                                                             |
-| Refunds & clawback           | [operations/refund.ts](src/operations/refund.ts), [operations/clawback.ts](src/operations/clawback.ts)                 | A reversal restores each account the sale touched, booking any uncollectable remainder to a receivable.                                   |
-| Settlement maturity gate     | [maturity.ts](src/maturity.ts)                                                                                         | Payouts release only funds settled past the chargeback window; fresh credits are held back until they mature.                             |
-| Spend-velocity risk gate     | [trust.ts](src/trust.ts)                                                                                               | `trust.ts` sums spend over the configured window and refuses a spend past the limit before any posting.                                   |
-| Three ledger stores          | [adapters/memory.ts](src/adapters/memory.ts), [packages/postgres](packages/postgres), [packages/mysql](packages/mysql) | The same logic runs in-memory and on PostgreSQL or MySQL. Each port has its own conformance suite.                                        |
+- Holds reserve matured CREDIT earnings only. Currency conversion, fees, an API server, and a UI were not added for this feature.
+- Full hot ledger history is required. The holds API refuses recorded archival or missing opening evidence; archive-aware releases are not implemented.
+- SQL schema version 19 adds the reserved account kind. The demo uses fresh databases; upgrading an existing persistent database is not automated by this feature.
+- Earned maturity reads replay account history, and hold discovery scans account names. This favors inspectable correctness over large-account throughput.
+- This API reads the store directly. Hosts using other cached wallet reads must invalidate them or allow their configured expiry after a hold change.
+- Event delivery, authorization, clock accuracy, and scheduling belong to the host. Tests use fakes and local databases; no external payout rail is exercised.
+- Administrative ledger edits, historical payout allocation before this version, and arbitrary changes to maturity policy are outside the generated model.
 
-`make prove` and `make fuzz` attack these invariants after every operation and across every backend.
+With two more days, I would add an indexed hold-discovery projection checked against the ledger and measure read cost as history grows, then design retention that preserves active hold evidence.
 
-## Ecosystem
-
-One sibling package composes around the ledger at runtime, behind the `Processor` port — the lab runs unchanged without it. See [the packages](https://economy-lab-docs.pages.dev/economy/ports/packages/) for where everything plugs in.
-
-- **[@pwngh/economy-edge](https://github.com/pwngh/economy-edge)** — a Tilia payout rail behind the `Processor` port.
-
-One more package serves the ledger without composing as a sibling. **[@pwngh/taskq](https://github.com/pwngh/taskq)** is an optional relay backend: with `TASKQ=1` the outbox relay rides taskq's task table beside the ledger, one at-least-once task per event, keyed by event id.
-
-## Run it
-
-```bash
-make dev         # local HTTP server — in-memory, dev tokens; zero setup
-make start       # HTTP service against the configured environment
-make worker      # background sweep loop
-make test        # the full suite, zero infra, all in-memory
-make check       # every gate, as 28 named steps in four tiers (node scripts/check.ts <tier> runs one)
-make demo        # the same local server, seeded with a top-up, a spend, and a rejection
-make demo-ops    # supervisor closed loop: a stuck payout is detected, swept, verified
-make prove       # randomized invariant proof; exits non-zero on any leak or drift
-make fuzz        # cross-backend differential — every backend must produce identical results
-make backup      # data-only dump of every configured engine into backups/
-make restore-drill # restore the newest dump into a scratch namespace and prove it
-make db-clean    # drop the orphaned throwaway namespaces a killed run left behind
-```
-
-Those verbs run the `economy` bin over this repository's own module at `economy/app.ts` — the same
-entry a project scaffolded by `create-economy` gets, and what the Docker image runs. The process is
-an HTTP service (`POST /submit`, `POST /webhooks/:provider`, plus `/healthz` and `/readyz`) and a
-background worker (sixteen sweeps on an interval). Every backend is picked by an environment
-variable: `DATABASE_URL` selects PostgreSQL or MySQL, `REDIS_URL` the
-cache. `SUPERVISOR=1` composes the supervisor around the worker, and
-[Ops & runbooks](https://economy-lab-docs.pages.dev/economy/ops/) holds one runbook per incident signature.
-
-## Performance
-
-`make bench` measures `submit` throughput per backend and integrity cost as the ledger grows. In
-memory it runs tens of thousands of submits per second; on Postgres or MySQL each submit is its own
-transaction, so throughput is commit-bound (hundreds per second). Those are the general-path
-numbers: where a workload allows it, instance netting and the entitlement bitset remove the
-transaction and the round-trip respectively.
-See [Performance](https://economy-lab-docs.pages.dev/economy/reference/performance/) for
-the measured tables and how to read them.
-
-## Apps
-
-- [apps/console](apps/console) — a demo admin UI driven by the live engine: accounts, the ledger
-  feed, the payout board, and an integrity page, with a simulation panel to advance time and run
-  the background jobs. [Try it live](https://economy-lab-docs.pages.dev/console/).
-- [apps/docs](apps/docs) — the source of the [documentation site](https://economy-lab-docs.pages.dev/economy/).
-
-## Documentation
-
-- [The Economy surface](https://economy-lab-docs.pages.dev/economy/reference/the-economy/) — the whole `submit` / `read` / `close` API.
-- [The proof](https://economy-lab-docs.pages.dev/economy/concepts/the-proof/) — what the randomized prover and the cross-backend differential each attack.
-- [HTTP service](https://economy-lab-docs.pages.dev/economy/reference/http-service/) — `POST /submit`, webhooks, and health checks.
-- [Background worker](https://economy-lab-docs.pages.dev/economy/reference/background-worker/) — the sixteen sweeps and how they run.
-- [Configuration](https://economy-lab-docs.pages.dev/economy/reference/configuration/) — every environment variable and backend selector.
-
-## License
-
-MIT — see [LICENSE.md](LICENSE.md).
+The one-page [invariants and enforcement note](BALANCE_HOLDS.md) and [decisions](DECISIONS.md) describe the implementation boundaries. The existing [documentation](https://economy-lab-docs.pages.dev/economy/) covers the ledger, stores, payout saga, subscriptions, and other packages. License: [MIT](LICENSE.md).

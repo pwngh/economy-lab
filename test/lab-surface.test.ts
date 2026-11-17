@@ -168,7 +168,7 @@ test('every subpath carries exactly the roster the fixture pins', () => {
     assert.deepEqual(named, pinned[subpath], `${subpath}: ${REGENERATE}`);
   }
   // deepEqual over two empty rosters passes, so the count is what proves the probe read anything.
-  assert.equal(symbolCount(live), 526, `resolved ${symbolCount(live)} symbols`);
+  assert.equal(symbolCount(live), 533, `resolved ${symbolCount(live)} symbols`);
   assert.equal(symbolCount(live), symbolCount(pinned));
 });
 
@@ -184,7 +184,7 @@ test('the roster totals reconcile through the symbols on more than one route', (
   const shared = [...routes.values()].filter((on) => on.length > 1);
   const extra = shared.reduce((sum, on) => sum + on.length - 1, 0);
 
-  assert.equal(routes.size, 476, `${routes.size} distinct symbols`);
+  assert.equal(routes.size, 483, `${routes.size} distinct symbols`);
   assert.equal(
     shared.length,
     47,
@@ -208,7 +208,7 @@ test('no symbol is a value on one route and a type on another', () => {
       kinds.set(name, kind);
     }
   }
-  assert.equal(kinds.size, 476);
+  assert.equal(kinds.size, 483);
 });
 
 // exports points at dist and never at src — a src-pointing map sends a consumer into the shipped
@@ -268,8 +268,8 @@ test('every src file is inside the public closure or a named exemption', () => {
       `${file} is exempted as unreached and a subpath now reaches it`,
     );
   }
-  assert.equal(all.length, 105, `walked ${all.length} src files`);
-  assert.equal(reached.length, 96);
+  assert.equal(all.length, 106, `walked ${all.length} src files`);
+  assert.equal(reached.length, 97);
   assert.equal(unreached.length, UNREACHED_SOURCES.size);
   assert.equal(reached.length + unreached.length, all.length);
 });
@@ -292,7 +292,7 @@ test('the three breaks this fixture cannot report are still the three it cannot 
   assert.deepEqual([...new Set(recorded)].sort(), ['type', 'value']);
   assert.equal(
     recorded.length,
-    526,
+    533,
     `read ${recorded.length} recorded symbols`,
   );
 

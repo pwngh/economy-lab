@@ -1952,4 +1952,7 @@ export interface Lot {
   toppedUpAt: number;
 
   maturesAt: number;
+
+  /** Only a balance-hold release carries this: it returns credit that already matured. */
+  holdReleasedAt?: number;
 }

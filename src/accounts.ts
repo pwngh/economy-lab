@@ -21,7 +21,12 @@ import type { Operation } from '#src/contract.ts';
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/accounts-and-double-entry/
  *   Accounts & double-entry} for how these accounts and their normal sides balance.
  */
-export type AccountKind = 'spendable' | 'earned' | 'promo' | 'escrow';
+export type AccountKind =
+  | 'spendable'
+  | 'earned'
+  | 'promo'
+  | 'escrow'
+  | 'reserved';
 
 /**
  * A branded account identifier string, so a plain string can't be used as an account. The only
@@ -75,6 +80,22 @@ export function escrowPartsOf(
  */
 export function earned(userId: string): AccountRef {
   return `${userId}:earned` as AccountRef;
+}
+
+/** A seller's held funds. The fixed segment sorts after earned for consistent locking. */
+export function balanceHoldAccount(userId: string, holdId: string): AccountRef {
+  return `${userId}:hold:${holdId}:reserved` as AccountRef;
+}
+
+/** Parses only the bounded, unambiguous account shape the holds API creates. */
+export function balanceHoldParts(
+  account: AccountRef,
+): { userId: string; holdId: string } | null {
+  const match =
+    /^([A-Za-z0-9_-]{1,40}):hold:([A-Za-z0-9_-]{1,40}):reserved$/.exec(account);
+  return match && match[1] !== 'platform'
+    ? { userId: match[1]!, holdId: match[2]! }
+    : null;
 }
 
 /**
@@ -470,6 +491,8 @@ export function walletKindOf(ref: AccountRef): AccountKind | null {
     return null;
   }
   const suffix = ref.slice(colon + 1);
+  if (suffix === 'reserved')
+    return balanceHoldParts(ref) === null ? null : 'reserved';
   if (
     suffix === 'spendable' ||
     suffix === 'earned' ||

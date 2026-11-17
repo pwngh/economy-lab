@@ -10,12 +10,14 @@
  */
 
 import { add, toAmount, zero } from '#src/money.ts';
-import { currency } from '#src/accounts.ts';
+import { currency, walletKindOf } from '#src/accounts.ts';
+import { balanceDelta } from '#src/ledger.ts';
+import { holdReleaseLotFields, metaString } from '#src/meta.ts';
 
 import type { Amount } from '#src/money.ts';
 import type { AccountRef } from '#src/accounts.ts';
 import type { CheckedConfig, Config } from '#src/config.ts';
-import type { Ledger, Lot } from '#src/ports.ts';
+import type { Ledger, Lot, StoredLink } from '#src/ports.ts';
 
 /**
  * The maturity config plus an optional AbortSignal passed through to the ledger's balance read.
@@ -64,7 +66,9 @@ export function maturityHorizonMs(source: string, config: Config): number {
  * missing source falls back to the 'default' horizon, just less precisely).
  */
 export function lotMaturesAt(lot: Lot, config: Config): number {
-  return lot.toppedUpAt + maturityHorizonMs(lot.source, config);
+  return (
+    lot.holdReleasedAt ?? lot.toppedUpAt + maturityHorizonMs(lot.source, config)
+  );
 }
 
 /**
@@ -101,6 +105,10 @@ async function* tailSlices(
   liveMinor: bigint,
   options: { now: number; config: Config },
 ): AsyncGenerator<TailSlice> {
+  if (walletKindOf(account) === 'earned') {
+    yield* earnedSlices(ledger, account, liveMinor, options);
+    return;
+  }
   let remaining = liveMinor;
   for (let offset = 0; remaining > 0n; offset += TAIL_PAGE) {
     let drained = 0;
@@ -127,6 +135,90 @@ async function* tailSlices(
       return;
     }
   }
+}
+
+// Earned withdrawals consume matured lots, which need not be the oldest lots when funding
+// sources have different horizons. Replaying these accounts preserves pending credit through
+// holds and payouts. It deliberately replays full history; other accounts keep the bounded tail.
+async function* earnedSlices(
+  ledger: Ledger,
+  account: AccountRef,
+  liveMinor: bigint,
+  options: { now: number; config: Config },
+): AsyncGenerator<TailSlice> {
+  const statement = await ledger.statement(account, {
+    from: Number.MIN_SAFE_INTEGER,
+    to: Number.MAX_SAFE_INTEGER,
+  });
+  const times = new Map(
+    statement.entries.map((entry) => [entry.txnId, entry.postedAt]),
+  );
+  const lots: ReplayLot[] = [];
+  for await (const link of ledger.lineage(account)) {
+    const postedAt = times.get(link.txnId);
+    if (postedAt === undefined) return; // Missing history cannot establish availability.
+    const { incoming, outgoing } = entryAmounts(link, account);
+    const source = metaString(link.meta, 'source', 'unknown');
+    if (incoming > 0n) {
+      const releasedAt = holdReleaseLotFields(
+        account,
+        link.meta,
+      ).holdReleasedAt;
+      lots.push({
+        take: incoming,
+        source,
+        maturesAt:
+          releasedAt ?? postedAt + maturityHorizonMs(source, options.config),
+      });
+    }
+    if (!drainEarned(lots, outgoing, link.meta, postedAt)) return;
+  }
+  if (lots.reduce((sum, lot) => sum + lot.take, 0n) !== liveMinor) return;
+  for (const lot of lots) {
+    if (lot.take > 0n) yield { ...lot, matured: lot.maturesAt <= options.now };
+  }
+}
+
+type ReplayLot = { take: bigint; maturesAt: number; source: string };
+function entryAmounts(
+  link: StoredLink,
+  account: AccountRef,
+): { incoming: bigint; outgoing: bigint } {
+  let incoming = 0n;
+  let outgoing = 0n;
+  for (const leg of link.legs) {
+    if (leg.account !== account) continue;
+    const delta = balanceDelta(leg).minor;
+    if (delta > 0n) incoming += delta;
+    else outgoing -= delta;
+  }
+  return { incoming, outgoing };
+}
+function drainEarned(
+  lots: ReplayLot[],
+  outgoing: bigint,
+  meta: Record<string, unknown>,
+  postedAt: number,
+): boolean {
+  // Historical payouts have no eligibility timestamp and retain their legacy FIFO allocation.
+  const maturedOnly =
+    meta.kind === 'placeBalanceHold' ||
+    (meta.kind === 'requestPayout' && typeof meta.maturityAt === 'number');
+  const explicitAt =
+    meta.kind === 'placeBalanceHold' ? meta.now : meta.maturityAt;
+  const at =
+    typeof explicitAt === 'number' && Number.isSafeInteger(explicitAt)
+      ? explicitAt
+      : postedAt;
+  for (const lot of lots) {
+    if (outgoing === 0n) break;
+    if (maturedOnly && lot.maturesAt > at) continue;
+    const take = outgoing < lot.take ? outgoing : lot.take;
+    lot.take -= take;
+    outgoing -= take;
+  }
+  // Missing history or a withdrawal with no eligible lots cannot establish availability.
+  return outgoing === 0n;
 }
 
 /**
@@ -212,12 +304,10 @@ export async function maturityBlocker(
 }
 
 /**
- * Returns the matured part of an account's balance as of `now`: how much a cash-out may draw
- * without dipping into funds still in their settlement wait. It reads the newest-first FIFO tail and
- * stops the instant the lots cover the live balance, so it never scans the already-spent history.
- * {@link maturedBalanceFullScan} keeps the naive O(account history) version for the differential
- * test. The computation is currency-agnostic, so it covers spendable credits and earned balances
- * alike.
+ * Returns the matured part of an account's balance as of `now`. Earned accounts replay their
+ * history to preserve pending lots through mature-only withdrawals. Other accounts read the
+ * newest-first FIFO tail and stop once it covers the live balance; their differential oracle
+ * is {@link maturedBalanceFullScan}.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}
  * for the dated-lot model, the FIFO tail, and why only the matured run may be drawn.
@@ -250,8 +340,8 @@ export async function maturedBalance(
 /**
  * Reports whether an account has at least `amount` of matured balance as of `now`, short-circuiting
  * once the matured running sum reaches `amount`. Equals `maturedBalance(...).minor >= amount.minor`
- * but stops early, so a request well within cleared funds costs O(amount-worth-of-lots). A
- * non-positive `amount` is trivially covered.
+ * but stops summing once the request is covered. Earned accounts first replay their full
+ * history; other accounts use the bounded FIFO tail. A non-positive `amount` is covered.
  *
  * @see {@link https://economy-lab-docs.pages.dev/economy/concepts/credit-maturity/ Credit maturity}
  *   for the dated-lot model behind the running sum.
@@ -290,9 +380,9 @@ export async function maturedAtLeast(
 }
 
 /**
- * Computes the matured balance by scanning the full history. It is kept verbatim as the oracle
- * the differential test checks the bounded {@link maturedBalance} against. Correct but O(account
- * history), so it lives here only for tests and never on the production read path.
+ * Full-history oracle for the bounded FIFO calculation on non-earned accounts. Earned
+ * accounts already use a full replay, so they share that implementation; the holds suite
+ * checks earned allocations against an independent state-machine model instead.
  */
 export async function maturedBalanceFullScan(
   ledger: Ledger,
@@ -300,6 +390,9 @@ export async function maturedBalanceFullScan(
   now: number,
   options: MaturityOptions,
 ): Promise<Amount> {
+  if (walletKindOf(account) === 'earned') {
+    return maturedBalance(ledger, account, now, options);
+  }
   const live = await ledger.balance(account, { signal: options.signal });
   const unit = currency(account);
   if (live.minor <= 0n) {

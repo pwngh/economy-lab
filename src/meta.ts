@@ -31,3 +31,21 @@ export function metaNumber(
   const value = meta[key];
   return typeof value === 'number' ? value : fallback;
 }
+
+/**
+ * A release returns already-matured earned credit. A caller-controlled funding source or
+ * maturesAt cannot opt in: only the dedicated posting kind, owner, and release time can.
+ */
+export function holdReleaseLotFields(
+  account: string,
+  meta: Record<string, unknown>,
+): { holdReleasedAt?: number } {
+  return meta.kind === 'releaseBalanceHold' &&
+    typeof meta.userId === 'string' &&
+    account === `${meta.userId}:earned` &&
+    typeof meta.now === 'number' &&
+    Number.isSafeInteger(meta.now) &&
+    meta.now >= 0
+    ? { holdReleasedAt: meta.now }
+    : {};
+}
